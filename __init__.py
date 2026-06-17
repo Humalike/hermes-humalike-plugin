@@ -244,6 +244,7 @@ async def _start_delivery(
 
 # ── Session → thread map (chunk 9: one thread per conversation) ───────────────
 _SESSIONS: Dict[str, str] = {}  # Hermes session_id → turn-taking thread_id
+_OPEN_LOCK = asyncio.Lock()     # serializes thread-opens (rare) so a burst can't double-open
 
 
 async def _ensure_thread(session_id: str, adapter: Any, chat_id: str) -> Optional[str]:
@@ -252,18 +253,20 @@ async def _ensure_thread(session_id: str, adapter: Any, chat_id: str) -> Optiona
     First activity per session opens the thread + WS delivery; later activity
     reuses it. Returns thread_id, or None if open_thread failed.
 
-    ponytail: check-then-await-set has a thin race if two first-messages for the
-    same NEW session interleave (→ two threads). The inbound micro-batch (later
-    chunk) coalesces simultaneous messages into one submit, so in practice the
-    first call wins; add a per-session lock only if that proves insufficient.
+    Since messages are gated per-message (no batch), two first-messages of a new
+    session can race; the lock + re-check makes the open once-only.
     """
     tid = _SESSIONS.get(session_id)
     if tid:
         return tid
-    tid = await _start_delivery(adapter, chat_id)
-    if tid:
-        _SESSIONS[session_id] = tid
-    return tid
+    async with _OPEN_LOCK:
+        tid = _SESSIONS.get(session_id)  # re-check under lock
+        if tid:
+            return tid
+        tid = await _start_delivery(adapter, chat_id)
+        if tid:
+            _SESSIONS[session_id] = tid
+        return tid
 
 
 # ── Decide gate (chunk 10: submit a batch, decide, stash the speak epoch) ─────
@@ -424,6 +427,50 @@ async def _inbound_gate(
         _persist_observed(session_store, session_id, events)
         return False
     return True  # speak, or None (fail-open: behave as if turn-taking is off)
+
+
+# ── Inbound patch (chunk 21: gate each message, no debounce) ──────────────────
+async def _handle_inbound(self: Any, event: Any) -> None:
+    """Gate one inbound text message, then dispatch on "speak".
+
+    No batching: the bridge poll already groups messages by its ~1s interval, and
+    the service decides turn-taking per message (staying silent mid-burst, then
+    speaking once). Messages the bot stays silent on are persisted as context by
+    the gate. Hermes adds the ``[Name]`` prefix itself (run.py) for the dispatched
+    message, so we don't merge.
+    """
+    source = event.source
+    store = getattr(self, "_session_store", None)
+    try:
+        if store is not None:
+            session_id = store.get_or_create_session(source).session_id
+            proceed = await _inbound_gate(self, store, session_id, source.chat_id, [event])
+        else:
+            proceed = True  # no store → can't decide; fall back to normal dispatch
+    except Exception as e:
+        _log.warning("turn-taking inbound gate failed: %s", e)
+        proceed = True  # fail-open
+    if proceed:
+        await self.handle_message(event)
+
+
+def _patch_inbound() -> bool:
+    """Replace ``WhatsAppAdapter._enqueue_text_event``: gate each message instead
+    of Hermes's 5s merge-debounce. Idempotent. Returns True if patched."""
+    try:
+        from gateway.platforms.whatsapp import WhatsAppAdapter
+    except Exception as e:
+        _log.warning("turn-taking: cannot patch inbound (no WhatsAppAdapter): %s", e)
+        return False
+    if getattr(WhatsAppAdapter._enqueue_text_event, "_tt_patched", False):
+        return False
+
+    def _enqueue_text_event(self, event):
+        asyncio.create_task(_handle_inbound(self, event))
+
+    _enqueue_text_event._tt_patched = True  # type: ignore[attr-defined]
+    WhatsAppAdapter._enqueue_text_event = _enqueue_text_event
+    return True
 
 
 def register(ctx) -> None:
