@@ -263,6 +263,27 @@ async def _decide(
     return decision
 
 
+# ── Respond side (chunk 11: naturalize a draft, carry the stashed epoch) ───────
+async def _respond(session_id: str, draft: str, system_prompt: Optional[str] = None) -> bool:
+    """Naturalize a completed draft for a session that decided "speak".
+
+    Reads (and consumes) the stashed epoch and calls respond. In WS mode the
+    bubbles are delivered by the receive loop, so nothing is returned for
+    sending — the bool just says whether a reply was scheduled:
+
+    - True  → scheduled; bubbles will arrive over WS.
+    - False → never decided speak / superseded (newer batch won) / service error.
+    """
+    tid = _SESSIONS.get(session_id)
+    epoch = _EPOCH.pop(session_id, None)  # consume once
+    if not tid or epoch is None:
+        return False  # this session never decided speak
+    res = await respond(tid, draft, epoch, system_prompt)
+    if not res or res.get("superseded"):
+        return False  # dropped: a newer batch arrived, or service error
+    return bool(res.get("scheduled"))
+
+
 def register(ctx) -> None:
     """Entry point. Wire hooks / adapter patches here (later chunks)."""
     pass
@@ -343,6 +364,32 @@ if __name__ == "__main__":  # offline self-check (no network) — config layer o
     assert asyncio.run(_decide_case({"decision": "stay_silent", "turn_epoch": 6})) == "stay_silent"
     assert "sX" not in _EPOCH  # stay_silent does not stash
     assert asyncio.run(_decide_case(None)) is None  # service unavailable → None
+    _EPOCH.clear()
+    _SESSIONS.clear()
+
+    # chunk 11: respond side (stub respond via holder, record the epoch passed)
+    _rresp: dict = {}  # holder: {"v": <respond return>, "epoch": <captured>}
+
+    async def _stub_respond(thread_id, content, turn_epoch, system_prompt=None):
+        _rresp["epoch"] = turn_epoch
+        return _rresp.get("v")
+
+    globals()["respond"] = _stub_respond
+
+    async def _respond_case(value):
+        _rresp["v"] = value
+        return await _respond("sY", "draft")
+
+    # no epoch stashed → no respond, False
+    _SESSIONS["sY"] = "th-y"
+    assert asyncio.run(_respond_case({"scheduled": [{}]})) is False
+    # speak epoch present → scheduled, True, epoch consumed + passed through
+    _EPOCH["sY"] = 9
+    assert asyncio.run(_respond_case({"scheduled": [{}], "superseded": False})) is True
+    assert _rresp["epoch"] == 9 and "sY" not in _EPOCH
+    # superseded → dropped, False
+    _EPOCH["sY"] = 10
+    assert asyncio.run(_respond_case({"scheduled": [], "superseded": True})) is False
     _EPOCH.clear()
     _SESSIONS.clear()
     print("ok")
