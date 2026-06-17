@@ -377,6 +377,30 @@ def _patch_send() -> bool:
     return True
 
 
+# ── Inbound gate (chunk 18: stay_silent → keep context, don't reply) ──────────
+def _persist_observed(session_store: Any, session_id: str, events: list) -> None:
+    """Append inbound messages to Hermes history WITHOUT dispatching the agent.
+
+    Used on a stay_silent decision so a later "speak" turn still has the context
+    the bot stayed quiet on. ``observed: True`` marks the rows as context (they
+    replay as background, not as unanswered user turns). The ``[Name]`` prefix is
+    the Hermes-side authorship convention (D12), so the agent knows who said what.
+    """
+    for ev in events:
+        text = (getattr(ev, "text", "") or "").strip()
+        if not text:
+            continue
+        name = getattr(getattr(ev, "source", None), "user_name", None)
+        entry = {"role": "user", "content": f"[{name}] {text}" if name else text, "observed": True}
+        mid = getattr(ev, "message_id", None)
+        if mid:
+            entry["message_id"] = str(mid)
+        try:
+            session_store.append_to_transcript(session_id, entry)
+        except Exception as e:
+            _log.warning("turn-taking: persist observed failed: %s", e)
+
+
 def register(ctx) -> None:
     """Entry point. Wire hooks / adapter patches here (later chunks)."""
     pass
@@ -516,4 +540,24 @@ if __name__ == "__main__":  # offline self-check (no network) — config layer o
     ]
     assert _to_messages([_Ev("yo", None)]) == [{"sender": "Unknown", "content": "yo"}]
     assert len(_to_messages([_Ev(f"m{i}", "U") for i in range(30)])) == 20  # cap
+
+    # chunk 18: stay_silent persistence (fake session_store records appends)
+    class _Ev2:
+        def __init__(self, text, name, mid=None):
+            self.text = text
+            self.source = _Src(name)
+            self.message_id = mid
+
+    class _Store:
+        def __init__(self):
+            self.rows = []
+
+        def append_to_transcript(self, session_id, message, skip_db=False):
+            self.rows.append((session_id, message))
+
+    _st = _Store()
+    _persist_observed(_st, "sP", [_Ev2("hej", "Maks", 11), _Ev2("  ", "X"), _Ev2("elo", "Borrell")])
+    assert [r[1]["content"] for r in _st.rows] == ["[Maks] hej", "[Borrell] elo"]  # empty skipped
+    assert all(r[0] == "sP" and r[1]["observed"] for r in _st.rows)
+    assert _st.rows[0][1] == {"role": "user", "content": "[Maks] hej", "observed": True, "message_id": "11"}
     print("ok")
