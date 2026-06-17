@@ -209,6 +209,30 @@ async def _start_delivery(
     return tid
 
 
+# ── Session → thread map (chunk 9: one thread per conversation) ───────────────
+_SESSIONS: Dict[str, str] = {}  # Hermes session_id → turn-taking thread_id
+
+
+async def _ensure_thread(session_id: str, adapter: Any, chat_id: str) -> Optional[str]:
+    """Get-or-create the turn-taking thread for a Hermes session.
+
+    First activity per session opens the thread + WS delivery; later activity
+    reuses it. Returns thread_id, or None if open_thread failed.
+
+    ponytail: check-then-await-set has a thin race if two first-messages for the
+    same NEW session interleave (→ two threads). The inbound micro-batch (later
+    chunk) coalesces simultaneous messages into one submit, so in practice the
+    first call wins; add a per-session lock only if that proves insufficient.
+    """
+    tid = _SESSIONS.get(session_id)
+    if tid:
+        return tid
+    tid = await _start_delivery(adapter, chat_id)
+    if tid:
+        _SESSIONS[session_id] = tid
+    return tid
+
+
 def register(ctx) -> None:
     """Entry point. Wire hooks / adapter patches here (later chunks)."""
     pass
@@ -246,4 +270,24 @@ if __name__ == "__main__":  # offline self-check (no network) — config layer o
 
     assert asyncio.run(_check_forward()) == [("chatA", "hej")]
     _ROUTES.clear()
+
+    # chunk 9: session→thread dedup (stub _start_delivery, count opens)
+    _starts: list = []
+
+    async def _fake_start(adapter, chat_id, thread_id=None):
+        _starts.append(chat_id)
+        return f"th-{len(_starts)}"
+
+    globals()["_start_delivery"] = _fake_start
+
+    async def _check_sessions():
+        t1 = await _ensure_thread("sessA", None, "chatA")
+        t2 = await _ensure_thread("sessA", None, "chatA")  # reuse, no new open
+        t3 = await _ensure_thread("sessB", None, "chatB")  # new
+        return t1, t2, t3
+
+    _t1, _t2, _t3 = asyncio.run(_check_sessions())
+    assert _t1 == _t2 and _t1 != _t3, (_t1, _t2, _t3)
+    assert _starts == ["chatA", "chatB"], _starts  # sessA opened once
+    _SESSIONS.clear()
     print("ok")
