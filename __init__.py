@@ -185,6 +185,30 @@ async def _forward(thread_id: Optional[str], content: Optional[str]) -> None:
     await adapter.send(chat_id, content)
 
 
+# ── Delivery bootstrap (chunk 8: open thread + route + start the WS loop) ──────
+async def _start_delivery(
+    adapter: Any, chat_id: str, thread_id: Optional[str] = None
+) -> Optional[str]:
+    """Open/reopen a thread, register its route, and start its WS receive loop.
+
+    Returns the thread_id (use it for submit_messages / respond), or None if
+    open_thread failed (fail-open: caller behaves as if turn-taking is off).
+
+    ponytail: spawn-and-forget — assumes a stable connection (D2), so no task
+    tracking / reconnect yet. Caller dedupes (one start per conversation); the
+    receive loop connects in ~ms, well before bubbles come due (~reading delay).
+    """
+    resp = await open_thread(thread_id)
+    tid = _thread_id(resp)
+    url = _connect_url(resp)
+    if not tid or not url:
+        _log.warning("turn-taking: open_thread failed — no delivery for chat %s", chat_id)
+        return None
+    _set_route(tid, adapter, chat_id)
+    asyncio.create_task(_receive_loop(url, _forward))
+    return tid
+
+
 def register(ctx) -> None:
     """Entry point. Wire hooks / adapter patches here (later chunks)."""
     pass
