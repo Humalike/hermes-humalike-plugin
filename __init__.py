@@ -467,6 +467,7 @@ async def _handle_inbound(self: Any, event: Any) -> None:
     the gate. Hermes adds the ``[Name]`` prefix itself (run.py) for the dispatched
     message, so we don't merge.
     """
+    _ensure_busy_patch(self)  # patch the busy handler once, now that the gateway is live
     source = event.source
     store = getattr(self, "_session_store", None)
     try:
@@ -501,6 +502,57 @@ def _patch_inbound() -> bool:
     _enqueue_text_event._tt_patched = True  # type: ignore[attr-defined]
     WhatsAppAdapter._enqueue_text_event = _enqueue_text_event
     return True
+
+
+# ── Interrupt (chunk 24: force-interrupt the in-flight draft on a new message) ─
+_busy_patched = False
+
+
+def _patch_busy(gateway_cls: Any) -> bool:
+    """Wrap ``gateway_cls._handle_active_session_busy_message`` so a new message
+    for a turn-taking chat ALWAYS interrupts the in-flight draft (Hermes queues
+    text by default).
+
+    Why it matters: ``_EPOCH`` holds only the latest "speak" epoch. If a stale
+    draft finished and reached the send patch, it would read the newer epoch and
+    be delivered. Interrupting kills it before send, so only the latest draft is
+    naturalized. Scoped to chats we manage (``_CHAT_SESSION``). Idempotent.
+
+    The class is taken from the live gateway (not imported) — register() runs
+    while gateway.run is still initializing, so importing it there is circular.
+    """
+    if getattr(gateway_cls._handle_active_session_busy_message, "_tt_patched", False):
+        return False
+    _orig = gateway_cls._handle_active_session_busy_message
+
+    async def _handle_active_session_busy_message(self, event, session_key):
+        chat = getattr(getattr(event, "source", None), "chat_id", None)
+        if chat in _CHAT_SESSION:
+            agent = self._running_agents.get(session_key)
+            if agent is not None and hasattr(agent, "interrupt"):
+                try:
+                    agent.interrupt(getattr(event, "text", None))
+                except Exception as e:
+                    _log.warning("turn-taking interrupt failed: %s", e)
+        return await _orig(self, event, session_key)
+
+    _handle_active_session_busy_message._tt_patched = True  # type: ignore[attr-defined]
+    gateway_cls._handle_active_session_busy_message = _handle_active_session_busy_message
+    return True
+
+
+def _ensure_busy_patch(adapter: Any) -> None:
+    """Lazily patch the busy handler on first inbound, when the gateway is live."""
+    global _busy_patched
+    if _busy_patched:
+        return
+    try:
+        gw = getattr(getattr(adapter, "_message_handler", None), "__self__", None)
+        if gw is not None:
+            _patch_busy(type(gw))
+            _busy_patched = True
+    except Exception as e:
+        _log.warning("turn-taking: busy patch deferred: %s", e)
 
 
 def register(ctx) -> None:
