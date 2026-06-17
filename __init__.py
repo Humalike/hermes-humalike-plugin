@@ -163,6 +163,11 @@ async def _receive_loop(
 # thread_id → (adapter, chat_id): where to deliver this thread's bubbles.
 _ROUTES: Dict[str, Tuple[Any, str]] = {}
 
+# The genuine WhatsAppAdapter.send, captured before patching (chunk 13/14), so
+# _forward delivers bubbles via the ORIGINAL — they bypass our patch entirely,
+# which is what suppresses the agent's monolithic draft. No metadata marker needed.
+_ORIG_SEND: Optional[Callable] = None
+
 
 def _set_route(thread_id: str, adapter: Any, chat_id: str) -> None:
     """Remember where a thread's delivered bubbles should be sent."""
@@ -182,7 +187,12 @@ async def _forward(thread_id: Optional[str], content: Optional[str]) -> None:
         _log.warning("turn-taking: no route for thread %s — dropping bubble", thread_id)
         return
     adapter, chat_id = route
-    await adapter.send(chat_id, content)
+    # Deliver via the original send so the bubble bypasses our patch (which drops
+    # the agent's draft). Before _patch_send runs, adapter.send IS the original.
+    if _ORIG_SEND is not None:
+        await _ORIG_SEND(adapter, chat_id, content)
+    else:
+        await adapter.send(chat_id, content)
 
 
 # ── Delivery bootstrap (chunk 8: open thread + route + start the WS loop) ──────
@@ -317,7 +327,9 @@ def _patch_send() -> bool:
         return False
     if getattr(WhatsAppAdapter.send, "_tt_patched", False):
         return False  # already patched
+    global _ORIG_SEND
     _orig = WhatsAppAdapter.send
+    _ORIG_SEND = _orig  # so _forward can deliver bubbles via the genuine send
 
     async def _send(self, chat_id, content, reply_to=None, metadata=None):
         # chunk 13: passthrough. Later: _respond(draft) + suppress for tt sessions.
@@ -364,6 +376,20 @@ if __name__ == "__main__":  # offline self-check (no network) — config layer o
         return fa.sent
 
     assert asyncio.run(_check_forward()) == [("chatA", "hej")]
+    _ROUTES.clear()
+
+    # chunk 14: with _ORIG_SEND set, _forward delivers via the original (bypasses patch)
+    _orig_calls: list = []
+
+    async def _fake_orig(adapter, chat_id, content):
+        _orig_calls.append((chat_id, content))
+
+    globals()["_ORIG_SEND"] = _fake_orig
+    _fa2 = _FakeAdapter()
+    _set_route("th2", _fa2, "chatB")
+    asyncio.run(_forward("th2", "elo"))
+    assert _orig_calls == [("chatB", "elo")] and _fa2.sent == []  # original used, not adapter.send
+    globals()["_ORIG_SEND"] = None
     _ROUTES.clear()
 
     # chunk 9: session→thread dedup (stub _start_delivery, count opens)
