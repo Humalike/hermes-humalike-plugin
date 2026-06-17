@@ -401,6 +401,31 @@ def _persist_observed(session_store: Any, session_id: str, events: list) -> None
             _log.warning("turn-taking: persist observed failed: %s", e)
 
 
+async def _inbound_gate(
+    adapter: Any,
+    session_store: Any,
+    session_id: str,
+    chat_id: str,
+    events: list,
+    system_prompt: Optional[str] = None,
+) -> bool:
+    """Decide whether an inbound batch should reach the agent.
+
+    - "speak" or service unavailable (None) → return True: dispatch normally, and
+      Hermes persists the turn itself.
+    - "stay_silent" → persist the messages as observed context and return False:
+      the bot keeps quiet but remembers.
+    """
+    messages = _to_messages(events)
+    if not messages:
+        return True  # nothing to decide → let Hermes handle it
+    decision = await _decide(session_id, adapter, chat_id, messages, system_prompt)
+    if decision == "stay_silent":
+        _persist_observed(session_store, session_id, events)
+        return False
+    return True  # speak, or None (fail-open: behave as if turn-taking is off)
+
+
 def register(ctx) -> None:
     """Entry point. Wire hooks / adapter patches here (later chunks)."""
     pass
@@ -560,4 +585,24 @@ if __name__ == "__main__":  # offline self-check (no network) — config layer o
     assert [r[1]["content"] for r in _st.rows] == ["[Maks] hej", "[Borrell] elo"]  # empty skipped
     assert all(r[0] == "sP" and r[1]["observed"] for r in _st.rows)
     assert _st.rows[0][1] == {"role": "user", "content": "[Maks] hej", "observed": True, "message_id": "11"}
+
+    # chunk 19: inbound gate (stub _decide via holder)
+    _gd: dict = {}
+
+    async def _stub_decide(session_id, adapter, chat_id, messages, system_prompt=None):
+        return _gd.get("v")
+
+    globals()["_decide"] = _stub_decide
+
+    async def _gate_case(decision, evs):
+        _gd["v"] = decision
+        st = _Store()
+        proceed = await _inbound_gate(None, st, "sG", "cG", evs)
+        return proceed, len(st.rows)
+
+    _ev = [_Ev2("hej", "Maks", 1)]
+    assert asyncio.run(_gate_case("speak", _ev)) == (True, 0)        # speak → dispatch, no persist
+    assert asyncio.run(_gate_case("stay_silent", _ev)) == (False, 1)  # silent → persist, no dispatch
+    assert asyncio.run(_gate_case(None, _ev)) == (True, 0)            # service off → fail-open dispatch
+    assert asyncio.run(_gate_case("speak", [_Ev2("  ", "X")])) == (True, 0)  # empty batch → dispatch
     print("ok")
