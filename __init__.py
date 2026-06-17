@@ -268,6 +268,7 @@ async def _ensure_thread(session_id: str, adapter: Any, chat_id: str) -> Optiona
 
 # ── Decide gate (chunk 10: submit a batch, decide, stash the speak epoch) ─────
 _EPOCH: Dict[str, int] = {}  # session_id → turn_epoch of the last "speak" (D8)
+_CHAT_SESSION: Dict[str, str] = {}  # chat_id → session_id, so the send patch finds the epoch
 
 
 async def _decide(
@@ -287,6 +288,7 @@ async def _decide(
     tid = await _ensure_thread(session_id, adapter, chat_id)
     if not tid:
         return None
+    _CHAT_SESSION[chat_id] = session_id  # so the send patch can map this chat → epoch
     res = await submit_messages(tid, messages, system_prompt)
     if not res:
         return None
@@ -335,24 +337,19 @@ def _to_messages(events: list) -> list[Dict[str, str]]:
     return out[-20:]
 
 
-# ── Hermes wiring (chunk 13/15: monkeypatch WhatsAppAdapter.send) ─────────────
-# chat_ids whose NEXT native send is the agent's draft to drop (set by the
-# transform_llm_output hook, consumed once by the patched send). Bubbles bypass
-# this entirely (they go via _ORIG_SEND), so only the monolithic draft is caught.
-_SUPPRESS_ONCE: set = set()
-
-
-def _suppress_next_send(chat_id: str) -> None:
-    """Flag this chat's next native send to be dropped (the agent's draft)."""
-    _SUPPRESS_ONCE.add(chat_id)
-
-
+# ── Hermes wiring (chunk 13/15/17: monkeypatch WhatsAppAdapter.send) ──────────
 def _patch_send() -> bool:
-    """Wrap ``WhatsAppAdapter.send`` so we can intercept outbound replies.
+    """Wrap ``WhatsAppAdapter.send``: turn the agent's draft into bubbles.
 
-    Chunk 13: passthrough only — proves the interception works and is idempotent.
-    A later chunk replaces the body with "call _respond() and suppress the native
-    send for turn-taking sessions". Returns True if it patched, False otherwise.
+    When ``send`` carries the agent's reply for a "speak" turn, naturalize it
+    (``_respond`` → bubbles delivered over WS) INSTEAD of sending the raw draft —
+    that avoids the duplicate (whole draft + its split bubbles). Everything else
+    passes straight through: errors, command replies, and — via ``_ORIG_SEND`` —
+    the bubbles themselves.
+
+    The pending epoch (``_EPOCH``, keyed by session) is the "this is the draft"
+    signal; ``_respond`` consumes it, so the next send for the chat passes through.
+    The draft still reaches Hermes history (persisted before send). Idempotent.
     """
     try:
         from gateway.platforms.whatsapp import WhatsAppAdapter
@@ -366,11 +363,12 @@ def _patch_send() -> bool:
     _ORIG_SEND = _orig  # so _forward can deliver bubbles via the genuine send
 
     async def _send(self, chat_id, content, reply_to=None, metadata=None):
-        if chat_id in _SUPPRESS_ONCE:
-            _SUPPRESS_ONCE.discard(chat_id)
-            # Drop the agent's monolithic draft — its bubbles are delivered over
-            # WS. Empty content makes the original return a no-send success, so
-            # Hermes sees the turn as delivered and doesn't retry.
+        sid = _CHAT_SESSION.get(chat_id)
+        if sid and sid in _EPOCH:
+            # The agent's draft for a "speak" turn → naturalize instead of send.
+            # _respond consumes the epoch; bubbles arrive over WS. Empty content
+            # makes the original return a no-send success (Hermes won't retry).
+            await _respond(sid, content)
             return await _orig(self, chat_id, "", reply_to=reply_to, metadata=metadata)
         return await _orig(self, chat_id, content, reply_to=reply_to, metadata=metadata)
 
