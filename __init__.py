@@ -51,6 +51,34 @@ def _headers() -> Dict[str, str]:
     return {"Authorization": f"Bearer {_api_key()}", "Content-Type": "application/json"}
 
 
+def _persona(adapter: Any = None) -> Optional[str]:
+    """The bot's identity prompt, passed to the service so decide/naturalize speak
+    in the bot's voice.
+
+    Prefer the gateway's live value (reflects a runtime ``/personality`` change),
+    reached via the adapter's message handler; else fall back to the same sources
+    the gateway loads from: ``HERMES_EPHEMERAL_SYSTEM_PROMPT`` or
+    ``agent.system_prompt`` in ~/.hermes/config.yaml. None when unset (generic).
+    """
+    try:
+        gw = getattr(getattr(adapter, "_message_handler", None), "__self__", None)
+        live = getattr(gw, "_ephemeral_system_prompt", None)
+        if live:
+            return live
+    except Exception:
+        pass
+    env = os.getenv("HERMES_EPHEMERAL_SYSTEM_PROMPT", "")
+    if env:
+        return env
+    try:
+        import yaml
+
+        cfg = yaml.safe_load(_HERMES_CONFIG.read_text()) or {}
+        return str((cfg.get("agent") or {}).get("system_prompt", "")).strip() or None
+    except Exception:
+        return None
+
+
 # ── Transport (chunk 2) ───────────────────────────────────────────────────────
 async def _post(path: str, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """POST ``body`` to ``path`` and return parsed JSON, or None on any failure.
@@ -371,7 +399,7 @@ def _patch_send() -> bool:
             # The agent's draft for a "speak" turn → naturalize instead of send.
             # _respond consumes the epoch; bubbles arrive over WS. Empty content
             # makes the original return a no-send success (Hermes won't retry).
-            await _respond(sid, content)
+            await _respond(sid, content, _persona(self))
             return await _orig(self, chat_id, "", reply_to=reply_to, metadata=metadata)
         return await _orig(self, chat_id, content, reply_to=reply_to, metadata=metadata)
 
@@ -444,7 +472,9 @@ async def _handle_inbound(self: Any, event: Any) -> None:
     try:
         if store is not None:
             session_id = store.get_or_create_session(source).session_id
-            proceed = await _inbound_gate(self, store, session_id, source.chat_id, [event])
+            proceed = await _inbound_gate(
+                self, store, session_id, source.chat_id, [event], _persona(self)
+            )
         else:
             proceed = True  # no store → can't decide; fall back to normal dispatch
     except Exception as e:
@@ -661,4 +691,21 @@ if __name__ == "__main__":  # offline self-check (no network) — config layer o
     assert asyncio.run(_gate_case("stay_silent", _ev)) == (False, 1)  # silent → persist, no dispatch
     assert asyncio.run(_gate_case(None, _ev)) == (True, 0)            # service off → fail-open dispatch
     assert asyncio.run(_gate_case("speak", [_Ev2("  ", "X")])) == (True, 0)  # empty batch → dispatch
+
+    # chunk 23: persona resolution (live gateway > env > config)
+    os.environ.pop("HERMES_EPHEMERAL_SYSTEM_PROMPT", None)
+
+    class _GW:
+        _ephemeral_system_prompt = "żywy głos"
+
+    _mh = type("MH", (), {})()
+    _mh.__self__ = _GW()
+    _ad = type("Ad", (), {})()
+    _ad._message_handler = _mh
+    assert _persona(_ad) == "żywy głos"  # live gateway wins
+    os.environ["HERMES_EPHEMERAL_SYSTEM_PROMPT"] = "z env"
+    assert _persona(None) == "z env"  # env fallback
+    os.environ.pop("HERMES_EPHEMERAL_SYSTEM_PROMPT", None)
+    globals()["_HERMES_CONFIG"] = Path("/nonexistent-turn-taking")
+    assert _persona(None) is None  # nothing set → generic
     print("ok")
