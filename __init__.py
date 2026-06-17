@@ -130,12 +130,13 @@ def _connect_url(open_resp: Optional[Dict[str, Any]]) -> Optional[str]:
 async def _receive_loop(
     connect_url: str,
     on_message: Callable[[Optional[str], Optional[str]], Awaitable[None]],
+    on_typing: Optional[Callable[[Optional[str], Optional[bool]], Awaitable[None]]] = None,
 ) -> None:
     """Read envelopes until the socket closes; dispatch each by ``type``.
 
     - ``turn_taking.message`` → ``await on_message(thread_id, content)`` (one bubble)
-    - ``attached`` (handshake) and ``turn_taking.typing`` → ignored (chunk 7 may
-      drive a typing indicator off the latter)
+    - ``turn_taking.typing``  → ``await on_typing(thread_id, typing)`` (if provided)
+    - ``attached`` (handshake) → ignored
 
     No reconnect: assumes a stable connection (D2). On close/error it logs and
     returns; the supervising task decides what to do next.
@@ -152,9 +153,12 @@ async def _receive_loop(
                     env = json.loads(frame)
                 except Exception:
                     continue
-                if env.get("type") == "turn_taking.message":
-                    data = env.get("data") or {}
+                t = env.get("type")
+                data = env.get("data") or {}
+                if t == "turn_taking.message":
                     await on_message(data.get("thread_id"), data.get("content"))
+                elif t == "turn_taking.typing" and on_typing is not None:
+                    await on_typing(data.get("thread_id"), data.get("typing"))
     except Exception as e:
         _log.warning("turn-taking WS loop ended: %s", e)
 
@@ -195,6 +199,25 @@ async def _forward(thread_id: Optional[str], content: Optional[str]) -> None:
         await adapter.send(chat_id, content)
 
 
+async def _forward_typing(thread_id: Optional[str], is_typing: Optional[bool]) -> None:
+    """on_typing callback: show "… is typing" on WhatsApp while the reply is paced.
+
+    Easy version: fire a one-shot indicator on typing-start. WhatsApp presence
+    auto-expires after a few seconds, so a long paced reply may stop showing it
+    mid-way; refresh-on-a-timer is a later polish if that matters.
+    """
+    if not is_typing:
+        return  # presence auto-expires; no explicit stop needed
+    route = _ROUTES.get(thread_id or "")
+    if route is None:
+        return
+    adapter, chat_id = route
+    try:
+        await adapter.send_typing(chat_id)
+    except Exception as e:
+        _log.warning("turn-taking typing failed: %s", e)
+
+
 # ── Delivery bootstrap (chunk 8: open thread + route + start the WS loop) ──────
 async def _start_delivery(
     adapter: Any, chat_id: str, thread_id: Optional[str] = None
@@ -215,7 +238,7 @@ async def _start_delivery(
         _log.warning("turn-taking: open_thread failed — no delivery for chat %s", chat_id)
         return None
     _set_route(tid, adapter, chat_id)
-    asyncio.create_task(_receive_loop(url, _forward))
+    asyncio.create_task(_receive_loop(url, _forward, _forward_typing))
     return tid
 
 
@@ -312,7 +335,18 @@ def _to_messages(events: list) -> list[Dict[str, str]]:
     return out[-20:]
 
 
-# ── Hermes wiring (chunk 13: monkeypatch WhatsAppAdapter.send) ────────────────
+# ── Hermes wiring (chunk 13/15: monkeypatch WhatsAppAdapter.send) ─────────────
+# chat_ids whose NEXT native send is the agent's draft to drop (set by the
+# transform_llm_output hook, consumed once by the patched send). Bubbles bypass
+# this entirely (they go via _ORIG_SEND), so only the monolithic draft is caught.
+_SUPPRESS_ONCE: set = set()
+
+
+def _suppress_next_send(chat_id: str) -> None:
+    """Flag this chat's next native send to be dropped (the agent's draft)."""
+    _SUPPRESS_ONCE.add(chat_id)
+
+
 def _patch_send() -> bool:
     """Wrap ``WhatsAppAdapter.send`` so we can intercept outbound replies.
 
@@ -332,7 +366,12 @@ def _patch_send() -> bool:
     _ORIG_SEND = _orig  # so _forward can deliver bubbles via the genuine send
 
     async def _send(self, chat_id, content, reply_to=None, metadata=None):
-        # chunk 13: passthrough. Later: _respond(draft) + suppress for tt sessions.
+        if chat_id in _SUPPRESS_ONCE:
+            _SUPPRESS_ONCE.discard(chat_id)
+            # Drop the agent's monolithic draft — its bubbles are delivered over
+            # WS. Empty content makes the original return a no-send success, so
+            # Hermes sees the turn as delivered and doesn't retry.
+            return await _orig(self, chat_id, "", reply_to=reply_to, metadata=metadata)
         return await _orig(self, chat_id, content, reply_to=reply_to, metadata=metadata)
 
     _send._tt_patched = True  # type: ignore[attr-defined]
