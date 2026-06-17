@@ -233,6 +233,36 @@ async def _ensure_thread(session_id: str, adapter: Any, chat_id: str) -> Optiona
     return tid
 
 
+# ── Decide gate (chunk 10: submit a batch, decide, stash the speak epoch) ─────
+_EPOCH: Dict[str, int] = {}  # session_id → turn_epoch of the last "speak" (D8)
+
+
+async def _decide(
+    session_id: str,
+    adapter: Any,
+    chat_id: str,
+    messages: list[Dict[str, str]],
+    system_prompt: Optional[str] = None,
+) -> Optional[str]:
+    """Submit a batch and return the decision ("speak" / "stay_silent").
+
+    On "speak" the epoch is stashed in ``_EPOCH[session_id]`` so the later
+    ``respond`` can carry it (fail-closed). Returns None when turn-taking is
+    unavailable (no thread / service error) — caller then behaves as if
+    turn-taking is off (let Hermes reply normally).
+    """
+    tid = await _ensure_thread(session_id, adapter, chat_id)
+    if not tid:
+        return None
+    res = await submit_messages(tid, messages, system_prompt)
+    if not res:
+        return None
+    decision = res.get("decision")
+    if decision == "speak":
+        _EPOCH[session_id] = res.get("turn_epoch")
+    return decision
+
+
 def register(ctx) -> None:
     """Entry point. Wire hooks / adapter patches here (later chunks)."""
     pass
@@ -289,5 +319,30 @@ if __name__ == "__main__":  # offline self-check (no network) — config layer o
     _t1, _t2, _t3 = asyncio.run(_check_sessions())
     assert _t1 == _t2 and _t1 != _t3, (_t1, _t2, _t3)
     assert _starts == ["chatA", "chatB"], _starts  # sessA opened once
+    _SESSIONS.clear()
+
+    # chunk 10: decide gate (stub ensure_thread + submit_messages via a holder)
+    _reply: dict = {}  # mutable holder the submit stub returns; set per case
+
+    async def _stub_ensure(session_id, adapter, chat_id):
+        return "th-x"
+
+    async def _stub_submit(thread_id, messages, system_prompt=None):
+        return _reply.get("v")
+
+    globals()["_ensure_thread"] = _stub_ensure
+    globals()["submit_messages"] = _stub_submit
+
+    async def _decide_case(value):
+        _reply["v"] = value
+        return await _decide("sX", None, "c", [{"sender": "M", "content": "hej"}])
+
+    assert asyncio.run(_decide_case({"decision": "speak", "turn_epoch": 5})) == "speak"
+    assert _EPOCH.get("sX") == 5  # speak stashes the epoch
+    _EPOCH.clear()
+    assert asyncio.run(_decide_case({"decision": "stay_silent", "turn_epoch": 6})) == "stay_silent"
+    assert "sX" not in _EPOCH  # stay_silent does not stash
+    assert asyncio.run(_decide_case(None)) is None  # service unavailable → None
+    _EPOCH.clear()
     _SESSIONS.clear()
     print("ok")
