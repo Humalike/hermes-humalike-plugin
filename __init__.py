@@ -12,7 +12,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, Optional, Tuple
 
 import httpx
 
@@ -159,6 +159,32 @@ async def _receive_loop(
         _log.warning("turn-taking WS loop ended: %s", e)
 
 
+# ── Delivery routing (chunk 7: reverse map + forwarder) ───────────────────────
+# thread_id → (adapter, chat_id): where to deliver this thread's bubbles.
+_ROUTES: Dict[str, Tuple[Any, str]] = {}
+
+
+def _set_route(thread_id: str, adapter: Any, chat_id: str) -> None:
+    """Remember where a thread's delivered bubbles should be sent."""
+    _ROUTES[thread_id] = (adapter, chat_id)
+
+
+async def _forward(thread_id: Optional[str], content: Optional[str]) -> None:
+    """on_message callback: route one delivered bubble to its WhatsApp chat.
+
+    No route (e.g. after a restart lost the map) → log + drop, never crash the
+    receive loop.
+    """
+    if not content:
+        return
+    route = _ROUTES.get(thread_id or "")
+    if route is None:
+        _log.warning("turn-taking: no route for thread %s — dropping bubble", thread_id)
+        return
+    adapter, chat_id = route
+    await adapter.send(chat_id, content)
+
+
 def register(ctx) -> None:
     """Entry point. Wire hooks / adapter patches here (later chunks)."""
     pass
@@ -177,4 +203,23 @@ if __name__ == "__main__":  # offline self-check (no network) — config layer o
     assert _thread_id(_resp) == "562640fb-03e9-47da-8afc-8702ff20bfee"
     assert _connect_url(_resp).startswith("ws://localhost:8005/")
     assert _thread_id(None) is None and _connect_url({}) is None  # malformed → None
+
+    # chunk 7: forwarder routing (offline, fake adapter)
+    class _FakeAdapter:
+        def __init__(self) -> None:
+            self.sent: list = []
+
+        async def send(self, chat_id, content):
+            self.sent.append((chat_id, content))
+
+    async def _check_forward():
+        fa = _FakeAdapter()
+        _set_route("th1", fa, "chatA")
+        await _forward("th1", "hej")        # routed
+        await _forward("th1", "")           # empty → skipped
+        await _forward("unknown", "x")      # no route → dropped, no crash
+        return fa.sent
+
+    assert asyncio.run(_check_forward()) == [("chatA", "hej")]
+    _ROUTES.clear()
     print("ok")
