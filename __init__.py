@@ -474,8 +474,17 @@ def _patch_inbound() -> bool:
 
 
 def register(ctx) -> None:
-    """Entry point. Wire hooks / adapter patches here (later chunks)."""
-    pass
+    """Plugin entry point: activate the send + inbound patches.
+
+    Idle (no patching) when turn-taking isn't configured, so the plugin is a
+    no-op unless ``TURN_TAKING_SERVICE_URL`` / config.yaml is set.
+    """
+    if not _service_url():
+        _log.info("turn-taking: no service_url configured — plugin idle")
+        return
+    sent = _patch_send()
+    inbound = _patch_inbound()
+    _log.info("turn-taking registered (send=%s, inbound=%s)", sent, inbound)
 
 
 if __name__ == "__main__":  # offline self-check (no network) — config layer only
