@@ -302,6 +302,32 @@ def _to_messages(events: list) -> list[Dict[str, str]]:
     return out[-20:]
 
 
+# ── Hermes wiring (chunk 13: monkeypatch WhatsAppAdapter.send) ────────────────
+def _patch_send() -> bool:
+    """Wrap ``WhatsAppAdapter.send`` so we can intercept outbound replies.
+
+    Chunk 13: passthrough only — proves the interception works and is idempotent.
+    A later chunk replaces the body with "call _respond() and suppress the native
+    send for turn-taking sessions". Returns True if it patched, False otherwise.
+    """
+    try:
+        from gateway.platforms.whatsapp import WhatsAppAdapter
+    except Exception as e:
+        _log.warning("turn-taking: cannot patch send (no WhatsAppAdapter): %s", e)
+        return False
+    if getattr(WhatsAppAdapter.send, "_tt_patched", False):
+        return False  # already patched
+    _orig = WhatsAppAdapter.send
+
+    async def _send(self, chat_id, content, reply_to=None, metadata=None):
+        # chunk 13: passthrough. Later: _respond(draft) + suppress for tt sessions.
+        return await _orig(self, chat_id, content, reply_to=reply_to, metadata=metadata)
+
+    _send._tt_patched = True  # type: ignore[attr-defined]
+    WhatsAppAdapter.send = _send
+    return True
+
+
 def register(ctx) -> None:
     """Entry point. Wire hooks / adapter patches here (later chunks)."""
     pass
