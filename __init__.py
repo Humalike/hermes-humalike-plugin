@@ -284,6 +284,24 @@ async def _respond(session_id: str, draft: str, system_prompt: Optional[str] = N
     return bool(res.get("scheduled"))
 
 
+# ── Hermes wiring (chunk 12: inbound events → service batch) ──────────────────
+def _to_messages(events: list) -> list[Dict[str, str]]:
+    """Convert Hermes inbound MessageEvents into the service's [{sender, content}].
+
+    Duck-typed (event.text, event.source.user_name) so it needs no Hermes import.
+    Skips empty text; applies the contract caps (≤20 messages, sender ≤255,
+    content ≤4000). Pass a single event as ``[event]``.
+    """
+    out: list[Dict[str, str]] = []
+    for ev in events:
+        content = (getattr(ev, "text", "") or "").strip()
+        if not content:
+            continue
+        sender = getattr(getattr(ev, "source", None), "user_name", None) or "Unknown"
+        out.append({"sender": sender[:255], "content": content[:4000]})
+    return out[-20:]
+
+
 def register(ctx) -> None:
     """Entry point. Wire hooks / adapter patches here (later chunks)."""
     pass
@@ -392,4 +410,21 @@ if __name__ == "__main__":  # offline self-check (no network) — config layer o
     assert asyncio.run(_respond_case({"scheduled": [], "superseded": True})) is False
     _EPOCH.clear()
     _SESSIONS.clear()
+
+    # chunk 12: inbound events → service batch
+    class _Src:
+        def __init__(self, name):
+            self.user_name = name
+
+    class _Ev:
+        def __init__(self, text, name):
+            self.text = text
+            self.source = _Src(name)
+
+    assert _to_messages([_Ev("hej", "Maks"), _Ev("  ", "X"), _Ev("elo", "Borrell")]) == [
+        {"sender": "Maks", "content": "hej"},
+        {"sender": "Borrell", "content": "elo"},
+    ]
+    assert _to_messages([_Ev("yo", None)]) == [{"sender": "Unknown", "content": "yo"}]
+    assert len(_to_messages([_Ev(f"m{i}", "U") for i in range(30)])) == 20  # cap
     print("ok")
