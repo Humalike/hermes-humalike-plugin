@@ -531,49 +531,49 @@ def _patch_inbound() -> bool:
 _busy_patched = False
 
 
-def _patch_busy(gateway_cls: Any) -> bool:
-    """Wrap ``gateway_cls._handle_active_session_busy_message`` so a new message
-    for a turn-taking chat ALWAYS interrupts the in-flight draft (Hermes queues
-    text by default).
+def _ensure_busy_patch(adapter: Any) -> None:
+    """Wrap the adapter's busy-session handler so a new message for a turn-taking
+    chat ALWAYS interrupts the in-flight draft (Hermes queues text by default).
 
     Why it matters: ``_EPOCH`` holds only the latest "speak" epoch. If a stale
-    draft finished and reached the send patch, it would read the newer epoch and
-    be delivered. Interrupting kills it before send, so only the latest draft is
-    naturalized. Scoped to chats we manage (``_CHAT_SESSION``). Idempotent.
+    draft finishes and reaches the send patch, it reads the newer epoch (or finds
+    none) — so it leaks raw. Interrupting kills it before send, so only the latest
+    draft survives.
 
-    The class is taken from the live gateway (not imported) — register() runs
-    while gateway.run is still initializing, so importing it there is circular.
+    CRITICAL: the gateway stores its handler as a *bound method instance attribute*
+    (``adapter._busy_session_handler``) at startup. Patching the gateway CLASS
+    method does NOT update that stored bound method, so we must wrap the instance
+    attribute itself. The gateway (for ``_running_agents``) is reached via the
+    bound method's ``__self__``. Done once, lazily, when the handler is set.
     """
-    if getattr(gateway_cls._handle_active_session_busy_message, "_tt_patched", False):
-        return False
-    _orig = gateway_cls._handle_active_session_busy_message
-
-    async def _handle_active_session_busy_message(self, event, session_key):
-        chat = getattr(getattr(event, "source", None), "chat_id", None)
-        if chat in _CHAT_SESSION:
-            agent = self._running_agents.get(session_key)
-            if agent is not None and hasattr(agent, "interrupt"):
-                try:
-                    agent.interrupt(getattr(event, "text", None))
-                except Exception as e:
-                    _log.warning("turn-taking interrupt failed: %s", e)
-        return await _orig(self, event, session_key)
-
-    _handle_active_session_busy_message._tt_patched = True  # type: ignore[attr-defined]
-    gateway_cls._handle_active_session_busy_message = _handle_active_session_busy_message
-    return True
-
-
-def _ensure_busy_patch(adapter: Any) -> None:
-    """Lazily patch the busy handler on first inbound, when the gateway is live."""
     global _busy_patched
     if _busy_patched:
         return
     try:
-        gw = getattr(getattr(adapter, "_message_handler", None), "__self__", None)
-        if gw is not None:
-            _patch_busy(type(gw))
+        orig = getattr(adapter, "_busy_session_handler", None)
+        if orig is None:
+            return  # not wired yet — retry on the next message
+        if getattr(orig, "_tt_wrapped", False):
             _busy_patched = True
+            return
+
+        async def _wrapper(event, session_key):
+            chat = getattr(getattr(event, "source", None), "chat_id", None)
+            if chat in _CHAT_SESSION:
+                gw = getattr(orig, "__self__", None)
+                agent = gw._running_agents.get(session_key) if gw is not None else None
+                if agent is not None and hasattr(agent, "interrupt"):
+                    try:
+                        agent.interrupt(getattr(event, "text", None))
+                        _log.info("tt: interrupted in-flight draft for chat=%s", chat)
+                    except Exception as e:
+                        _log.warning("turn-taking interrupt failed: %s", e)
+            return await orig(event, session_key)
+
+        _wrapper._tt_wrapped = True  # type: ignore[attr-defined]
+        adapter.set_busy_session_handler(_wrapper)
+        _busy_patched = True
+        _log.info("tt: busy handler wrapped (interrupt enabled)")
     except Exception as e:
         _log.warning("turn-taking: busy patch deferred: %s", e)
 
