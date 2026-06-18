@@ -326,6 +326,8 @@ async def _decide(
     decision = res.get("decision")
     if decision == "speak":
         _EPOCH[session_id] = res.get("turn_epoch")
+    _log.info("tt decide: session=%s chat=%s decision=%s epoch=%s",
+              session_id, chat_id, decision, _EPOCH.get(session_id))
     return decision
 
 
@@ -368,7 +370,19 @@ def _to_messages(events: list) -> list[Dict[str, str]]:
     return out[-20:]
 
 
-# ── Hermes wiring (chunk 13/15/17: monkeypatch WhatsAppAdapter.send) ──────────
+# ── Hermes wiring: monkeypatch WhatsAppAdapter.send ───────────────────────────
+# chat_id → {exact answer strings awaiting their raw send}. transform_llm_output
+# registers the FINAL answer's text here; the send patch drops the send whose
+# content matches (it's naturalized + delivered over WS instead). Keying by
+# CONTENT (not "next send") makes suppression order-independent: it targets the
+# answer by identity, so a racing tool-notice / error send can't consume it.
+_PENDING_ANSWERS: Dict[str, set] = {}
+
+
+def _suppress_answer(chat_id: str, content: str) -> None:
+    _PENDING_ANSWERS.setdefault(chat_id, set()).add((content or "").strip())
+
+
 def _patch_send() -> bool:
     """Wrap ``WhatsAppAdapter.send``: turn the agent's draft into bubbles.
 
@@ -394,13 +408,19 @@ def _patch_send() -> bool:
     _ORIG_SEND = _orig  # so _forward can deliver bubbles via the genuine send
 
     async def _send(self, chat_id, content, reply_to=None, metadata=None):
-        sid = _CHAT_SESSION.get(chat_id)
-        if sid and sid in _EPOCH:
-            # The agent's draft for a "speak" turn → naturalize instead of send.
-            # _respond consumes the epoch; bubbles arrive over WS. Empty content
-            # makes the original return a no-send success (Hermes won't retry).
-            await _respond(sid, content, _persona(self))
+        pend = _PENDING_ANSWERS.get(chat_id)
+        key = (content or "").strip()
+        if pend is not None and key in pend:
+            pend.discard(key)
+            if not pend:
+                _PENDING_ANSWERS.pop(chat_id, None)
+            # This send IS the agent's final answer — naturalized by
+            # transform_llm_output and delivered as bubbles over WS, so drop the
+            # raw copy. Empty content → original returns a no-send success.
+            _log.info("tt send: chat=%s → SUPPRESS (matched answer, bubbles via WS) | %r",
+                      chat_id, key[:50])
             return await _orig(self, chat_id, "", reply_to=reply_to, metadata=metadata)
+        _log.info("tt send: chat=%s → passthrough | %r", chat_id, key[:50])
         return await _orig(self, chat_id, content, reply_to=reply_to, metadata=metadata)
 
     _send._tt_patched = True  # type: ignore[attr-defined]
@@ -469,6 +489,9 @@ async def _handle_inbound(self: Any, event: Any) -> None:
     """
     _ensure_busy_patch(self)  # patch the busy handler once, now that the gateway is live
     source = event.source
+    _log.info("tt inbound: chat=%s sender=%s text=%r",
+              getattr(source, "chat_id", None), getattr(source, "user_name", None),
+              (getattr(event, "text", "") or "")[:50])
     store = getattr(self, "_session_store", None)
     try:
         if store is not None:
@@ -555,6 +578,36 @@ def _ensure_busy_patch(adapter: Any) -> None:
         _log.warning("turn-taking: busy patch deferred: %s", e)
 
 
+# ── transform_llm_output hook: naturalize the FINAL answer, suppress its raw send ─
+def _chat_for_session(session_id: str) -> Optional[str]:
+    """The WhatsApp chat_id a session delivers to (session → thread → route)."""
+    thread = _SESSIONS.get(session_id)
+    route = _ROUTES.get(thread or "") if thread else None
+    return route[1] if route else None
+
+
+def on_transform_llm_output(response_text=None, session_id=None, **kwargs):
+    """Fired once per turn with the agent's FINAL answer (after the tool loop).
+
+    Tool-progress sends (💻/⚠️/✅) do NOT pass through here, so this naturalizes
+    the *answer* precisely — unlike the send patch, which can't tell the answer
+    from tool noise. Fires _respond (bubbles over WS) and flags the imminent raw
+    send of this answer for suppression. Returns None so the draft stays in
+    Hermes history (only its *send* is dropped).
+    """
+    draft = response_text
+    sid = session_id or ""
+    if not draft or sid not in _EPOCH:
+        return None  # not a turn-taking speak turn → leave Hermes alone
+    chat = _chat_for_session(sid)
+    if chat:
+        _suppress_answer(chat, draft)  # drop the send whose content matches this answer
+    _log.info("tt transform: session=%s chat=%s → naturalize answer + suppress its raw send | %r",
+              sid, chat, (draft or "").strip()[:50])
+    asyncio.create_task(_respond(sid, draft, _persona(None)))  # bubbles delivered via WS
+    return None
+
+
 def register(ctx) -> None:
     """Plugin entry point: activate the send + inbound patches.
 
@@ -566,7 +619,13 @@ def register(ctx) -> None:
         return
     sent = _patch_send()
     inbound = _patch_inbound()
-    _log.info("turn-taking registered (send=%s, inbound=%s)", sent, inbound)
+    hooked = False
+    try:
+        ctx.register_hook("transform_llm_output", on_transform_llm_output)
+        hooked = True
+    except Exception as e:
+        _log.warning("turn-taking: could not register transform_llm_output hook: %s", e)
+    _log.info("turn-taking registered (send=%s, inbound=%s, transform=%s)", sent, inbound, hooked)
 
 
 if __name__ == "__main__":  # offline self-check (no network) — config layer only
