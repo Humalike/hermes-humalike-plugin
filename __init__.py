@@ -306,6 +306,12 @@ async def _ensure_thread(session_id: str, adapter: Any, chat_id: str) -> Optiona
 _EPOCH: Dict[str, int] = {}  # session_id → turn_epoch of the last "speak" (D8)
 _CHAT_SESSION: Dict[str, str] = {}  # chat_id → session_id, so the send patch finds the epoch
 
+# The gateway's asyncio loop, captured on the inbound path (which runs in it).
+# transform_llm_output fires in the agent's worker thread where there is NO running
+# loop, so _respond must be scheduled onto this loop via run_coroutine_threadsafe —
+# create_task there raises "no running event loop" and the naturalize call is lost.
+_LOOP = None
+
 
 async def _decide(
     session_id: str,
@@ -503,6 +509,11 @@ async def _handle_inbound(self: Any, event: Any) -> None:
     the gate. Hermes adds the ``[Name]`` prefix itself (run.py) for the dispatched
     message, so we don't merge.
     """
+    global _LOOP
+    try:
+        _LOOP = asyncio.get_running_loop()  # capture the gateway loop for _respond scheduling
+    except RuntimeError:
+        pass
     _ensure_busy_patch(self)  # patch the busy handler once, now that the gateway is live
     source = event.source
     _log.info("tt inbound: chat=%s sender=%s text=%r",
@@ -620,7 +631,18 @@ def on_transform_llm_output(response_text=None, session_id=None, **kwargs):
         _suppress_answer(chat, draft)  # drop the send whose content matches this answer
     _log.info("tt transform: session=%s chat=%s → naturalize answer + suppress its raw send | %r",
               sid, chat, (draft or "").strip()[:50])
-    asyncio.create_task(_respond(sid, draft, _persona(None)))  # bubbles delivered via WS
+    # transform_llm_output runs in the agent's worker thread (no running loop here),
+    # so hand _respond to the gateway loop captured on inbound. A bare create_task
+    # raises "no running event loop" and the naturalize call is silently lost.
+    _coro = _respond(sid, draft, _persona(None))
+    try:
+        if _LOOP is not None:
+            asyncio.run_coroutine_threadsafe(_coro, _LOOP)  # bubbles delivered via WS
+        else:
+            asyncio.create_task(_coro)  # fallback: already in a loop
+    except Exception as e:
+        _coro.close()
+        _log.warning("tt transform: could not schedule _respond: %s", e)
     return None
 
 
