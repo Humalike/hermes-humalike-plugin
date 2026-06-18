@@ -176,6 +176,7 @@ async def _receive_loop(
         return
     try:
         async with websockets.connect(connect_url) as ws:
+            _log.info("tt ws: connected | %s", connect_url[:80])
             async for frame in ws:
                 try:
                     env = json.loads(frame)
@@ -183,6 +184,7 @@ async def _receive_loop(
                     continue
                 t = env.get("type")
                 data = env.get("data") or {}
+                _log.info("tt ws: frame type=%s tid=%s", t, data.get("thread_id"))
                 if t == "turn_taking.message":
                     await on_message(data.get("thread_id"), data.get("content"))
                 elif t == "turn_taking.typing" and on_typing is not None:
@@ -219,6 +221,8 @@ async def _forward(thread_id: Optional[str], content: Optional[str]) -> None:
         _log.warning("turn-taking: no route for thread %s — dropping bubble", thread_id)
         return
     adapter, chat_id = route
+    _log.info("tt forward: tid=%s chat=%s → deliver bubble (via=%s) | %r",
+              thread_id, chat_id, "orig" if _ORIG_SEND is not None else "plain", content[:60])
     # Deliver via the original send so the bubble bypasses our patch (which drops
     # the agent's draft). Before _patch_send runs, adapter.send IS the original.
     if _ORIG_SEND is not None:
@@ -266,6 +270,7 @@ async def _start_delivery(
         _log.warning("turn-taking: open_thread failed — no delivery for chat %s", chat_id)
         return None
     _set_route(tid, adapter, chat_id)
+    _log.info("tt delivery: thread opened tid=%s for chat=%s → starting WS loop", tid, chat_id)
     asyncio.create_task(_receive_loop(url, _forward, _forward_typing))
     return tid
 
@@ -345,10 +350,17 @@ async def _respond(session_id: str, draft: str, system_prompt: Optional[str] = N
     tid = _SESSIONS.get(session_id)
     epoch = _EPOCH.pop(session_id, None)  # consume once
     if not tid or epoch is None:
+        _log.info("tt respond: session=%s → SKIP (no thread / no speak epoch)", session_id)
         return False  # this session never decided speak
+    _log.info("tt respond: session=%s tid=%s epoch=%s → naturalizing | %r",
+              session_id, tid, epoch, (draft or "").strip()[:60])
     res = await respond(tid, draft, epoch, system_prompt)
     if not res or res.get("superseded"):
+        _log.info("tt respond: session=%s → DROPPED (superseded=%s / no response)",
+                  session_id, bool(res and res.get("superseded")))
         return False  # dropped: a newer batch arrived, or service error
+    _log.info("tt respond: session=%s → scheduled=%s (bubbles will arrive over WS)",
+              session_id, res.get("scheduled"))
     return bool(res.get("scheduled"))
 
 
@@ -473,7 +485,11 @@ async def _inbound_gate(
     decision = await _decide(session_id, adapter, chat_id, messages, system_prompt)
     if decision == "stay_silent":
         _persist_observed(session_store, session_id, events)
+        _log.info("tt gate: session=%s chat=%s → STAY_SILENT (persisted %d observed msg(s), no dispatch)",
+                  session_id, chat_id, len(messages))
         return False
+    _log.info("tt gate: session=%s chat=%s → PROCEED (decision=%s) → dispatch agent",
+              session_id, chat_id, decision)
     return True  # speak, or None (fail-open: behave as if turn-taking is off)
 
 
