@@ -51,15 +51,40 @@ def _headers() -> Dict[str, str]:
     return {"Authorization": f"Bearer {_api_key()}", "Content-Type": "application/json"}
 
 
-def _persona(adapter: Any = None) -> Optional[str]:
-    """The bot's identity prompt, passed to the service so decide/naturalize speak
-    in the bot's voice.
+def _persona(adapter: Any = None, session_id: Optional[str] = None) -> Optional[str]:
+    """The bot's voice/style/personality, passed to the service so decide/
+    naturalize/foresee speak in the bot's voice.
 
-    Prefer the gateway's live value (reflects a runtime ``/personality`` change),
-    reached via the adapter's message handler; else fall back to the same sources
-    the gateway loads from: ``HERMES_EPHEMERAL_SYSTEM_PROMPT`` or
+    Only the persona parts of Hermes' system prompt — never tool/skill schemas:
+    ``SOUL.md`` (static personality) plus the social-learning voice card (the
+    live per-session voice). Falls back to the gateway live value (runtime
+    ``/personality`` change), ``HERMES_EPHEMERAL_SYSTEM_PROMPT``, or
     ``agent.system_prompt`` in ~/.hermes/config.yaml. None when unset (generic).
     """
+    # Voice/style/personality only: SOUL.md + the live voice card. Both are small
+    # persona text (no tool/skill schemas), so they stay under the service's
+    # agent_instructions cap. ponytail: SOUL.md read straight off disk like
+    # _HERMES_CONFIG; the card is read in-process from the social-learning plugin
+    # (both plugins share the one gateway process) — coupled to its _CACHE name,
+    # silently skipped if it moves.
+    parts: list[str] = []
+    try:
+        soul = _HERMES_CONFIG.with_name("SOUL.md").read_text().strip()
+        if soul:
+            parts.append(soul)
+    except Exception:
+        pass
+    if session_id:
+        try:
+            from hermes_plugins.social_learning import _CACHE  # noqa: PLC0415
+
+            card = _CACHE.get(session_id)
+            if card:
+                parts.append(card)
+        except Exception:
+            pass
+    if parts:
+        return "\n\n".join(parts)
     try:
         gw = getattr(getattr(adapter, "_message_handler", None), "__self__", None)
         live = getattr(gw, "_ephemeral_system_prompt", None)
@@ -524,7 +549,7 @@ async def _handle_inbound(self: Any, event: Any) -> None:
         if store is not None:
             session_id = store.get_or_create_session(source).session_id
             proceed = await _inbound_gate(
-                self, store, session_id, source.chat_id, [event], _persona(self)
+                self, store, session_id, source.chat_id, [event], _persona(self, session_id)
             )
         else:
             proceed = True  # no store → can't decide; fall back to normal dispatch
@@ -634,7 +659,7 @@ def on_transform_llm_output(response_text=None, session_id=None, **kwargs):
     # transform_llm_output runs in the agent's worker thread (no running loop here),
     # so hand _respond to the gateway loop captured on inbound. A bare create_task
     # raises "no running event loop" and the naturalize call is silently lost.
-    _coro = _respond(sid, draft, _persona(None))
+    _coro = _respond(sid, draft, _persona(None, sid))
     try:
         if _LOOP is not None:
             asyncio.run_coroutine_threadsafe(_coro, _LOOP)  # bubbles delivered via WS
