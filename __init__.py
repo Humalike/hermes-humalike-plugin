@@ -347,6 +347,7 @@ _EPOCH_BY_MESSAGE_ID: Dict[str, int] = {}  # message_id → turn_epoch of the "s
 # (Hermes's own HERMES_SESSION_MESSAGE_ID is empty on the WhatsApp path, hence ours.)
 _TT_MID_CTX: ContextVar[str] = ContextVar("tt_message_id", default="")
 _run_agent_patched = False  # idempotency for _ensure_run_agent_patch
+_merge_patched = False  # idempotency for _patch_merge_keep_latest_id
 
 # The gateway's asyncio loop, captured on the inbound path (which runs in it).
 # transform_llm_output fires in the agent's worker thread where there is NO running
@@ -654,6 +655,67 @@ def _ensure_run_agent_patch(adapter: Any) -> None:
         _log.warning("turn-taking: _run_agent patch deferred: %s", e)
 
 
+# ── Merged-turn epoch fix (chunk 25: keep the LATEST id when text is merged) ───
+def _patch_merge_keep_latest_id() -> bool:
+    """Make a turn formed by merging rapid follow-ups keep the LATEST message_id.
+
+    When the agent is busy, Hermes coalesces follow-up TEXT into the pending turn
+    via ``merge_pending_message_event(merge_text=True)``. That function's text
+    branch appends the text but NEVER reassigns ``existing.message_id`` — so the
+    merged turn carries the FIRST message's id. The plugin then binds the FIRST
+    (already superseded) turn-taking epoch → the service drops it → SILENCE, even
+    though the merged turn computed the correct (latest) answer.
+
+    Fix: after the merge, rebind the surviving event's id to the LATEST — exactly
+    what the debounce path already does for its own buffer (base.py:3491-3496).
+    Separate turns never enter the merge branch, so they are unaffected. Patched in
+    BOTH modules that name the function: ``gateway.platforms.base`` (defines it) and
+    ``gateway.run`` (imported it by value), else run's call sites keep the old one.
+    Idempotent.
+    """
+    global _merge_patched
+    if _merge_patched:
+        return False
+    try:
+        import gateway.platforms.base as _base
+        import gateway.run as _run
+    except Exception as e:
+        _log.warning("turn-taking: cannot patch merge (import failed): %s", e)
+        return False
+    orig = getattr(_base, "merge_pending_message_event", None)
+    if orig is None:
+        return False
+    if getattr(orig, "_tt_patched", False):
+        _merge_patched = True
+        return False
+
+    def _merge(pending_messages, session_key, event, *, merge_text=False):
+        existing = pending_messages.get(session_key)
+        orig(pending_messages, session_key, event, merge_text=merge_text)
+        # A text follow-up merged INTO the existing pending turn (same object kept,
+        # not replaced) → keep the latest id so the merged turn binds the current
+        # epoch. Guard on a real id so synthetic/interrupt events (id=None) can't
+        # clobber it.
+        merged = pending_messages.get(session_key)
+        if (
+            merge_text
+            and merged is existing
+            and merged is not None
+            and getattr(event, "message_id", None) is not None
+        ):
+            mid = str(event.message_id)
+            merged.message_id = mid
+            if hasattr(merged, "reply_to_message_id"):
+                merged.reply_to_message_id = mid
+
+    _merge._tt_patched = True  # type: ignore[attr-defined]
+    _base.merge_pending_message_event = _merge
+    _run.merge_pending_message_event = _merge  # run.py imported it by value
+    _merge_patched = True
+    _log.info("tt: merge_pending_message_event wrapped (keep latest id)")
+    return True
+
+
 # ── transform_llm_output hook: naturalize the FINAL answer, suppress its raw send ─
 def _current_message_id() -> str:
     """The inbound platform message_id of the turn currently being answered.
@@ -723,10 +785,12 @@ def register(ctx) -> None:
         return
     sent = _patch_send()
     inbound = _patch_inbound()
+    merge_fix = _patch_merge_keep_latest_id()
     hooked = False
     try:
         ctx.register_hook("transform_llm_output", on_transform_llm_output)
         hooked = True
     except Exception as e:
         _log.warning("turn-taking: could not register transform_llm_output hook: %s", e)
-    _log.info("turn-taking registered (send=%s, inbound=%s, transform=%s)", sent, inbound, hooked)
+    _log.info("turn-taking registered (send=%s, inbound=%s, merge_fix=%s, transform=%s)",
+              sent, inbound, merge_fix, hooked)
