@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import os
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, Optional, Tuple
 
@@ -328,8 +329,24 @@ async def _ensure_thread(session_id: str, adapter: Any, chat_id: str) -> Optiona
 
 
 # ── Decide gate (chunk 10: submit a batch, decide, stash the speak epoch) ─────
-_EPOCH: Dict[str, int] = {}  # session_id → turn_epoch of the last "speak" (D8)
-_CHAT_SESSION: Dict[str, str] = {}  # chat_id → session_id, so the send patch finds the epoch
+# Per-turn epoch keyed by the platform message_id of the message that turn answers
+# (D8). Keying by message_id — not by a single per-session slot — binds each draft
+# to its OWN epoch at respond time: the transform hook recovers this turn's
+# message_id from Hermes's per-task session contextvar (HERMES_SESSION_MESSAGE_ID,
+# set by the gateway before the turn runs and propagated into the worker thread via
+# copy_context). That is ordering-independent and needs no interrupt to stay correct.
+_EPOCH_BY_MESSAGE_ID: Dict[str, int] = {}  # message_id → turn_epoch of the "speak" decision
+
+# Per-turn message_id, carried into the turn's worker thread and read by the
+# transform hook. Set inside GatewayRunner._run_agent (see _ensure_run_agent_patch),
+# NOT in the inbound task: a queued message's turn runs via _run_agent's recursive
+# follow-up (run.py:19091) INSIDE the prior turn's task, so the inbound task's set is
+# never seen by it. _run_agent runs once per turn with that turn's own
+# event_message_id, so setting the var there — before copy_context() snapshots it for
+# the executor — gives every turn (first or queued) its correct id.
+# (Hermes's own HERMES_SESSION_MESSAGE_ID is empty on the WhatsApp path, hence ours.)
+_TT_MID_CTX: ContextVar[str] = ContextVar("tt_message_id", default="")
+_run_agent_patched = False  # idempotency for _ensure_run_agent_patch
 
 # The gateway's asyncio loop, captured on the inbound path (which runs in it).
 # transform_llm_output fires in the agent's worker thread where there is NO running
@@ -344,34 +361,39 @@ async def _decide(
     chat_id: str,
     messages: list[Dict[str, str]],
     system_prompt: Optional[str] = None,
+    message_id: str = "",
 ) -> Optional[str]:
     """Submit a batch and return the decision ("speak" / "stay_silent").
 
-    On "speak" the epoch is stashed in ``_EPOCH[session_id]`` so the later
-    ``respond`` can carry it (fail-closed). Returns None when turn-taking is
-    unavailable (no thread / service error) — caller then behaves as if
-    turn-taking is off (let Hermes reply normally).
+    On "speak" the epoch is stashed in ``_EPOCH_BY_MESSAGE_ID[message_id]`` so the
+    later ``respond`` for THIS turn can carry its own epoch (fail-closed). Returns
+    None when turn-taking is unavailable (no thread / service error) — caller then
+    behaves as if turn-taking is off (let Hermes reply normally).
     """
     tid = await _ensure_thread(session_id, adapter, chat_id)
     if not tid:
         return None
-    _CHAT_SESSION[chat_id] = session_id  # so the send patch can map this chat → epoch
     res = await submit_messages(tid, messages, system_prompt)
     if not res:
         return None
     decision = res.get("decision")
-    if decision == "speak":
-        _EPOCH[session_id] = res.get("turn_epoch")
-    _log.info("tt decide: session=%s chat=%s decision=%s epoch=%s",
-              session_id, chat_id, decision, _EPOCH.get(session_id))
+    epoch = res.get("turn_epoch")
+    if decision == "speak" and message_id:
+        # ponytail: no message_id → can't correlate at respond time, so don't stash;
+        # the turn then degrades to a plain (un-naturalized) reply rather than risk a
+        # mismatched epoch. WhatsApp always carries one, so this is the rare path.
+        _EPOCH_BY_MESSAGE_ID[message_id] = epoch
+    _log.info("tt decide: session=%s chat=%s mid=%s decision=%s epoch=%s",
+              session_id, chat_id, message_id, decision, epoch)
     return decision
 
 
-# ── Respond side (chunk 11: naturalize a draft, carry the stashed epoch) ───────
-async def _respond(session_id: str, draft: str, system_prompt: Optional[str] = None) -> bool:
-    """Naturalize a completed draft for a session that decided "speak".
-
-    Reads (and consumes) the stashed epoch and calls respond. In WS mode the
+# ── Respond side (chunk 11: naturalize a draft, carry this turn's epoch) ───────
+async def _respond(
+    session_id: str, draft: str, epoch: Optional[int], system_prompt: Optional[str] = None
+) -> bool:
+    """Naturalize a completed draft using THIS turn's epoch (resolved by the
+    transform hook from the per-turn message_id) and call respond. In WS mode the
     bubbles are delivered by the receive loop, so nothing is returned for
     sending — the bool just says whether a reply was scheduled:
 
@@ -379,7 +401,6 @@ async def _respond(session_id: str, draft: str, system_prompt: Optional[str] = N
     - False → never decided speak / superseded (newer batch won) / service error.
     """
     tid = _SESSIONS.get(session_id)
-    epoch = _EPOCH.pop(session_id, None)  # consume once
     if not tid or epoch is None:
         _log.info("tt respond: session=%s → SKIP (no thread / no speak epoch)", session_id)
         return False  # this session never decided speak
@@ -435,9 +456,10 @@ def _patch_send() -> bool:
     passes straight through: errors, command replies, and — via ``_ORIG_SEND`` —
     the bubbles themselves.
 
-    The pending epoch (``_EPOCH``, keyed by session) is the "this is the draft"
-    signal; ``_respond`` consumes it, so the next send for the chat passes through.
-    The draft still reaches Hermes history (persisted before send). Idempotent.
+    The "this is the draft" signal is ``_PENDING_ANSWERS`` (keyed by exact answer
+    text), registered by the transform hook for the answer it naturalized; the send
+    whose content matches is dropped, so a racing tool-notice can't be consumed by
+    mistake. The draft still reaches Hermes history (persisted before send). Idempotent.
     """
     try:
         from gateway.platforms.whatsapp import WhatsAppAdapter
@@ -502,6 +524,7 @@ async def _inbound_gate(
     chat_id: str,
     events: list,
     system_prompt: Optional[str] = None,
+    message_id: str = "",
 ) -> bool:
     """Decide whether an inbound batch should reach the agent.
 
@@ -513,7 +536,7 @@ async def _inbound_gate(
     messages = _to_messages(events)
     if not messages:
         return True  # nothing to decide → let Hermes handle it
-    decision = await _decide(session_id, adapter, chat_id, messages, system_prompt)
+    decision = await _decide(session_id, adapter, chat_id, messages, system_prompt, message_id)
     if decision == "stay_silent":
         _persist_observed(session_store, session_id, events)
         _log.info("tt gate: session=%s chat=%s → STAY_SILENT (persisted %d observed msg(s), no dispatch)",
@@ -539,17 +562,18 @@ async def _handle_inbound(self: Any, event: Any) -> None:
         _LOOP = asyncio.get_running_loop()  # capture the gateway loop for _respond scheduling
     except RuntimeError:
         pass
-    _ensure_busy_patch(self)  # patch the busy handler once, now that the gateway is live
+    _ensure_run_agent_patch(self)  # bind per-turn message_id inside _run_agent (queue-robust)
     source = event.source
-    _log.info("tt inbound: chat=%s sender=%s text=%r",
+    message_id = str(getattr(event, "message_id", "") or "")
+    _log.info("tt inbound: chat=%s sender=%s mid=%s text=%r",
               getattr(source, "chat_id", None), getattr(source, "user_name", None),
-              (getattr(event, "text", "") or "")[:50])
+              message_id, (getattr(event, "text", "") or "")[:50])
     store = getattr(self, "_session_store", None)
     try:
         if store is not None:
             session_id = store.get_or_create_session(source).session_id
             proceed = await _inbound_gate(
-                self, store, session_id, source.chat_id, [event], _persona(self, session_id)
+                self, store, session_id, source.chat_id, [event], _persona(self, session_id), message_id
             )
         else:
             proceed = True  # no store → can't decide; fall back to normal dispatch
@@ -579,58 +603,71 @@ def _patch_inbound() -> bool:
     return True
 
 
-# ── Interrupt (chunk 24: force-interrupt the in-flight draft on a new message) ─
-_busy_patched = False
+# ── Per-turn message_id binding (chunk 24: queue-robust correlation) ───────────
+def _ensure_run_agent_patch(adapter: Any) -> None:
+    """Wrap ``GatewayRunner._run_agent`` to stash this turn's message_id in
+    ``_TT_MID_CTX`` for the transform hook to read.
 
+    Why here and not in the inbound task: a message that arrives while the agent is
+    busy is queued, and its turn is run later via ``_run_agent``'s recursive
+    follow-up (run.py:19091) INSIDE the PRIOR turn's task — so a contextvar set in
+    the inbound task never reaches it (it would read the prior turn's id). But
+    ``_run_agent`` runs once per turn (first call run.py:9460, queued recursion
+    run.py:19100), each with ``event_message_id`` = that turn's platform message_id
+    (the WhatsApp reply anchor, which is ``event.message_id`` — the same id the
+    decide side keyed the epoch map with). Setting the var at the top of
+    ``_run_agent`` — in the turn's OWN coroutine frame, before ``copy_context()``
+    snapshots it for the worker thread (run.py:15612) — gives every turn its correct
+    id, queued or not. The token reset keeps it scoped to the call (so a recursive
+    follow-up restores the parent's value on return).
 
-def _ensure_busy_patch(adapter: Any) -> None:
-    """Wrap the adapter's busy-session handler so a new message for a turn-taking
-    chat ALWAYS interrupts the in-flight draft (Hermes queues text by default).
-
-    Why it matters: ``_EPOCH`` holds only the latest "speak" epoch. If a stale
-    draft finishes and reaches the send patch, it reads the newer epoch (or finds
-    none) — so it leaks raw. Interrupting kills it before send, so only the latest
-    draft survives.
-
-    CRITICAL: the gateway stores its handler as a *bound method instance attribute*
-    (``adapter._busy_session_handler``) at startup. Patching the gateway CLASS
-    method does NOT update that stored bound method, so we must wrap the instance
-    attribute itself. The gateway (for ``_running_agents``) is reached via the
-    bound method's ``__self__``. Done once, lazily, when the handler is set.
+    Reached via the adapter's message handler ``__self__`` (the GatewayRunner). Done
+    once, lazily, when the gateway is live. Idempotent.
     """
-    global _busy_patched
-    if _busy_patched:
+    global _run_agent_patched
+    if _run_agent_patched:
         return
     try:
-        orig = getattr(adapter, "_busy_session_handler", None)
+        gw = getattr(getattr(adapter, "_message_handler", None), "__self__", None)
+        if gw is None:
+            return  # gateway not wired yet — retry on the next message
+        cls = type(gw)
+        orig = getattr(cls, "_run_agent", None)
         if orig is None:
-            return  # not wired yet — retry on the next message
-        if getattr(orig, "_tt_wrapped", False):
-            _busy_patched = True
+            return
+        if getattr(orig, "_tt_patched", False):
+            _run_agent_patched = True
             return
 
-        async def _wrapper(event, session_key):
-            chat = getattr(getattr(event, "source", None), "chat_id", None)
-            if chat in _CHAT_SESSION:
-                gw = getattr(orig, "__self__", None)
-                agent = gw._running_agents.get(session_key) if gw is not None else None
-                if agent is not None and hasattr(agent, "interrupt"):
-                    try:
-                        agent.interrupt(getattr(event, "text", None))
-                        _log.info("tt: interrupted in-flight draft for chat=%s", chat)
-                    except Exception as e:
-                        _log.warning("turn-taking interrupt failed: %s", e)
-            return await orig(event, session_key)
+        async def _wrapped(self, *args, **kwargs):
+            token = _TT_MID_CTX.set(str(kwargs.get("event_message_id") or ""))
+            try:
+                return await orig(self, *args, **kwargs)
+            finally:
+                _TT_MID_CTX.reset(token)
 
-        _wrapper._tt_wrapped = True  # type: ignore[attr-defined]
-        adapter.set_busy_session_handler(_wrapper)
-        _busy_patched = True
-        _log.info("tt: busy handler wrapped (interrupt enabled)")
+        _wrapped._tt_patched = True  # type: ignore[attr-defined]
+        cls._run_agent = _wrapped
+        _run_agent_patched = True
+        _log.info("tt: _run_agent wrapped (per-turn message_id binding)")
     except Exception as e:
-        _log.warning("turn-taking: busy patch deferred: %s", e)
+        _log.warning("turn-taking: _run_agent patch deferred: %s", e)
 
 
 # ── transform_llm_output hook: naturalize the FINAL answer, suppress its raw send ─
+def _current_message_id() -> str:
+    """The inbound platform message_id of the turn currently being answered.
+
+    Read from our own per-task contextvar (``_TT_MID_CTX``), set per turn inside
+    ``GatewayRunner._run_agent`` (see _ensure_run_agent_patch) and propagated into
+    the worker thread via ``copy_context()``. Task-local, so concurrent turns never
+    see each other's id, and queued follow-up turns get their OWN id. "" when
+    unavailable (then we leave Hermes alone). (Hermes's own
+    ``HERMES_SESSION_MESSAGE_ID`` is empty on the WhatsApp path — hence our var.)
+    """
+    return _TT_MID_CTX.get("") or ""
+
+
 def _chat_for_session(session_id: str) -> Optional[str]:
     """The WhatsApp chat_id a session delivers to (session → thread → route)."""
     thread = _SESSIONS.get(session_id)
@@ -649,17 +686,21 @@ def on_transform_llm_output(response_text=None, session_id=None, **kwargs):
     """
     draft = response_text
     sid = session_id or ""
-    if not draft or sid not in _EPOCH:
+    # Recover THIS turn's epoch by the message_id it answers (read from the
+    # per-task contextvar, looked up in the map filled at decide). consume once.
+    mid = _current_message_id()
+    epoch = _EPOCH_BY_MESSAGE_ID.pop(mid, None) if mid else None
+    if not draft or epoch is None:
         return None  # not a turn-taking speak turn → leave Hermes alone
     chat = _chat_for_session(sid)
     if chat:
         _suppress_answer(chat, draft)  # drop the send whose content matches this answer
-    _log.info("tt transform: session=%s chat=%s → naturalize answer + suppress its raw send | %r",
-              sid, chat, (draft or "").strip()[:50])
+    _log.info("tt transform: session=%s chat=%s mid=%s epoch=%s → naturalize + suppress raw send | %r",
+              sid, chat, mid, epoch, (draft or "").strip()[:50])
     # transform_llm_output runs in the agent's worker thread (no running loop here),
     # so hand _respond to the gateway loop captured on inbound. A bare create_task
     # raises "no running event loop" and the naturalize call is silently lost.
-    _coro = _respond(sid, draft, _persona(None, sid))
+    _coro = _respond(sid, draft, epoch, _persona(None, sid))
     try:
         if _LOOP is not None:
             asyncio.run_coroutine_threadsafe(_coro, _LOOP)  # bubbles delivered via WS
