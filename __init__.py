@@ -22,6 +22,13 @@ OPEN_THREAD_PATH = "/v1/turn-taking/actions/open_thread"
 SUBMIT_PATH = "/v1/turn-taking/actions/submit_messages"
 RESPOND_PATH = "/v1/turn-taking/actions/respond"
 
+# The service rejects an over-long system_prompt (validation_failed) and 422s
+# every decide/respond, silently disabling turn-taking. Clamp at the wire to the
+# service's contract cap (svc-turn-taking contracts.py max_length) as a safety net
+# for an oversized SOUL.md + voice card. Head-keep: identity is at the top of
+# SOUL.md, the most useful signal for decide/naturalize.
+_SYSTEM_PROMPT_CAP = 100000
+
 _HERMES_CONFIG = Path.home() / ".hermes" / "config.yaml"
 
 
@@ -148,7 +155,7 @@ async def submit_messages(
     """Decide speak/stay_silent for a batch of {sender, content}. Returns {decision, turn_epoch}."""
     body: Dict[str, Any] = {"thread_id": thread_id, "messages": messages}
     if system_prompt:
-        body["system_prompt"] = system_prompt
+        body["system_prompt"] = system_prompt[:_SYSTEM_PROMPT_CAP]
     return await _post(SUBMIT_PATH, body)
 
 
@@ -161,7 +168,7 @@ async def respond(
     """Naturalize a draft (epoch required, fail-closed). Returns {scheduled, superseded}."""
     body: Dict[str, Any] = {"thread_id": thread_id, "content": content, "turn_epoch": turn_epoch}
     if system_prompt:
-        body["system_prompt"] = system_prompt
+        body["system_prompt"] = system_prompt[:_SYSTEM_PROMPT_CAP]
     return await _post(RESPOND_PATH, body)
 
 

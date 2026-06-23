@@ -90,6 +90,11 @@ def _persona_text(raw: str) -> str:
 
 
 # ── Enhance API ───────────────────────────────────────────────────────────────
+# Appended to every persona we enhance so the generated system prompt never uses
+# an em-dash (the LLM's tell). Sent in-band since enhance takes only {persona, grounding}.
+_NO_EMDASH_DIRECTIVE = "\n\nHARD RULE: never use an em-dash (—) anywhere in this persona."
+
+
 async def enhance(persona_text: str, grounding: str = "off") -> Optional[Dict[str, Any]]:
     """Enhance a persona and return the rendered ``persona`` dict (with
     ``system_prompt``/``fields``/``markdown``), or None on any failure (fail-open).
@@ -103,7 +108,7 @@ async def enhance(persona_text: str, grounding: str = "off") -> Optional[Dict[st
         async with httpx.AsyncClient(timeout=30.0) as client:
             r = await client.post(
                 base + ENHANCE_PATH,
-                json={"persona": persona_text, "grounding": grounding},
+                json={"persona": persona_text + _NO_EMDASH_DIRECTIVE, "grounding": grounding},
                 headers=headers,
             )
             r.raise_for_status()
