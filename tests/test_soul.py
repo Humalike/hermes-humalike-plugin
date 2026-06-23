@@ -55,6 +55,18 @@ def test_grounding_validates():
     del os.environ["HERMES_SOUL_GROUNDING"]
 
 
+def test_auto_enhance_default_on_and_disableable():
+    os.environ.pop("HERMES_SOUL_AUTO_ENHANCE", None)
+    assert soul._auto_enabled() is True  # default on (no config in test env)
+    os.environ["HERMES_SOUL_AUTO_ENHANCE"] = "false"
+    assert soul._auto_enabled() is False
+    os.environ["HERMES_SOUL_AUTO_ENHANCE"] = "off"
+    assert soul._auto_enabled() is False
+    os.environ["HERMES_SOUL_AUTO_ENHANCE"] = "true"
+    assert soul._auto_enabled() is True
+    del os.environ["HERMES_SOUL_AUTO_ENHANCE"]
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

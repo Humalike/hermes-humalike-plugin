@@ -789,6 +789,10 @@ def register(ctx) -> None:
         _log.info("turn-taking: registered /soul command")
     except Exception as e:
         _log.warning("turn-taking: could not register /soul command: %s", e)
+    try:
+        soul.maybe_auto_enhance()  # one-shot on first startup (marker-guarded)
+    except Exception as e:
+        _log.warning("turn-taking: auto-enhance skipped: %s", e)
     if not _service_url():
         _log.info("turn-taking: no service_url configured — turn-taking idle (/soul still available)")
         return

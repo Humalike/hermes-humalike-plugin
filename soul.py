@@ -17,6 +17,7 @@ import asyncio
 import logging
 import os
 import re
+import threading
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -25,6 +26,7 @@ import httpx
 _log = logging.getLogger("hermes.plugins.turn_taking")
 
 _HERMES_CONFIG = Path.home() / ".hermes" / "config.yaml"
+_AUTO_MARKER = _HERMES_CONFIG.with_name(".soul_auto_enhanced")  # one-shot guard
 ENHANCE_PATH = "/v1/personas/actions/enhance"
 ENHANCEMENT_REPO = "/v1/personas/repositories/Enhancement/by-id/{}"
 DEFAULT_API = "https://api.humalike.com"
@@ -173,3 +175,63 @@ async def command(raw_args: str) -> str:
     _log.info("soul: enhanced %s (%d → %d chars)", path, len(raw), len(enhanced))
     return (f"✅ Enhanced your persona ({len(raw)} → {len(enhanced)} chars). "
             f"Old version saved to {path.name}.bak — it takes effect on your next message.")
+
+
+# ── Auto-enhance on first startup ─────────────────────────────────────────────
+# There is no install-time hook in Hermes; register() runs at every gateway boot.
+# So "auto-run after install" = run once, guarded by a marker file. The marker is
+# written only after a *successful* enhance, so a boot where the service is down or
+# SOUL.md has no seed yet harmlessly retries next time. Disable with
+# `turn_taking.soul_auto_enhance: false` (or env HERMES_SOUL_AUTO_ENHANCE=false).
+def _auto_enabled() -> bool:
+    v = os.getenv("HERMES_SOUL_AUTO_ENHANCE")
+    if v is None:
+        v = _cfg().get("soul_auto_enhance")
+    if v is None:
+        return True  # default on
+    return str(v).strip().lower() not in ("false", "0", "no", "off")
+
+
+async def _auto_enhance() -> bool:
+    """One-shot enhance with no chat to reply to — log the outcome. Returns True
+    only when SOUL.md was actually rewritten (so the caller sets the once-marker)."""
+    path = _soul_path()
+    try:
+        raw = path.read_text()
+    except FileNotFoundError:
+        raw = ""
+    if not seed_body(raw):
+        _log.info("soul: auto-enhance skipped — %s has no persona seed yet", path)
+        return False
+    persona = await enhance(_persona_text(raw), _grounding())
+    enhanced = (persona or {}).get("system_prompt")
+    if not enhanced:
+        _log.warning("soul: auto-enhance failed (service unreachable?) — %s left unchanged", path)
+        return False
+    enhanced = enhanced.strip()
+    try:
+        Path(str(path) + ".bak").write_text(raw)
+        path.write_text(enhanced + "\n")
+    except Exception as e:
+        _log.warning("soul: auto-enhance write failed: %s", e)
+        return False
+    _log.info("soul: auto-enhanced %s (%d → %d chars)", path, len(raw), len(enhanced))
+    return True
+
+
+def maybe_auto_enhance() -> None:
+    """Fire the one-shot auto-enhance on first startup, in a background thread so it
+    never blocks gateway boot (enhance polls for minutes). Marker-guarded and a no-op
+    once done. ponytail: delete ~/.hermes/.soul_auto_enhanced to force a re-run."""
+    if not _auto_enabled() or _AUTO_MARKER.exists():
+        return
+
+    def _run() -> None:
+        try:
+            if asyncio.run(_auto_enhance()):
+                _AUTO_MARKER.write_text("")  # succeeded → never auto-run again
+        except Exception as e:
+            _log.warning("soul: auto-enhance thread errored: %s", e)
+
+    threading.Thread(target=_run, daemon=True).start()
+    _log.info("soul: auto-enhance scheduled (first startup)")

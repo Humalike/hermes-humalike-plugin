@@ -92,9 +92,19 @@ turn_taking:
   personas_api_url: "https://api.humalike.com"  # optional, this is the default
   soul_path: "~/.hermes/SOUL.md"                # optional; point at docker/SOUL.md to edit the repo copy
   soul_grounding: "off"                          # off | web | research (research can take minutes)
+  soul_auto_enhance: true                        # optional; default true (see below)
 ```
 
 The Personas API reuses `TURN_TAKING_API_KEY` unless you set `HUMALIKE_API_KEY`.
+
+### Auto-enhance on first startup
+
+On the **first gateway startup**, the plugin runs `/soul enhance` once automatically
+(in the background, so it never blocks boot), then writes a marker
+(`~/.hermes/.soul_auto_enhanced`) so it never runs again. It only fires when `SOUL.md`
+already has a real persona seed and the API key is set — otherwise it harmlessly
+retries on a later boot. Disable with `soul_auto_enhance: false` (or env
+`HERMES_SOUL_AUTO_ENHANCE=false`). To force a re-run, delete the marker file.
 
 ## Failure behavior
 
