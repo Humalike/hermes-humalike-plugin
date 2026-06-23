@@ -1,9 +1,4 @@
-"""Hermes turn-taking plugin — svc-turn-taking integration (WebSocket delivery).
-
-Built in tiny chunks.
-  CHUNK 1: config + auth.
-  CHUNK 2: transport — _post + action paths. Still no high-level actions.
-"""
+"""Hermes turn-taking plugin — turn-taking service integration (WebSocket delivery)."""
 
 from __future__ import annotations
 
@@ -11,15 +6,18 @@ import asyncio
 import json
 import logging
 import os
+import re
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, Optional, Tuple
 
 import httpx
 
+from . import soul
+
 _log = logging.getLogger("hermes.plugins.turn_taking")
 
-# ── Wire contract (svc-turn-taking action paths) ──────────────────────────────
+# ── Wire contract (turn-taking service action paths) ──────────────────────────
 OPEN_THREAD_PATH = "/v1/turn-taking/actions/open_thread"
 SUBMIT_PATH = "/v1/turn-taking/actions/submit_messages"
 RESPOND_PATH = "/v1/turn-taking/actions/respond"
@@ -27,7 +25,7 @@ RESPOND_PATH = "/v1/turn-taking/actions/respond"
 _HERMES_CONFIG = Path.home() / ".hermes" / "config.yaml"
 
 
-# ── Config + auth (chunk 1) ───────────────────────────────────────────────────
+# ── Config + auth ─────────────────────────────────────────────────────────────
 def _service_url() -> str:
     """Base URL. Env ``TURN_TAKING_SERVICE_URL`` wins; else config.yaml; "" if unset."""
     url = os.getenv("TURN_TAKING_SERVICE_URL", "")
@@ -43,7 +41,7 @@ def _service_url() -> str:
 
 
 def _api_key() -> str:
-    """Clerk API key (``ak_...``) from ``TURN_TAKING_API_KEY``."""
+    """API key from ``TURN_TAKING_API_KEY`` (sent as ``Authorization: Bearer``)."""
     return os.getenv("TURN_TAKING_API_KEY", "")
 
 
@@ -105,7 +103,7 @@ def _persona(adapter: Any = None, session_id: Optional[str] = None) -> Optional[
         return None
 
 
-# ── Transport (chunk 2) ───────────────────────────────────────────────────────
+# ── Transport ─────────────────────────────────────────────────────────────────
 async def _post(path: str, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """POST ``body`` to ``path`` and return parsed JSON, or None on any failure.
 
@@ -136,7 +134,7 @@ async def _post(path: str, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     # (KeyError/TypeError) now propagate instead of hiding as fail-open.
 
 
-# ── Actions (chunk 3) ─────────────────────────────────────────────────────────
+# ── Actions ───────────────────────────────────────────────────────────────────
 async def open_thread(thread_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Open/reopen a thread (id = idempotency key). Returns {thread, channel, realtime}."""
     return await _post(OPEN_THREAD_PATH, {"thread_id": thread_id} if thread_id else {})
@@ -167,7 +165,7 @@ async def respond(
     return await _post(RESPOND_PATH, body)
 
 
-# ── WS lifecycle (chunk 4: parse the open_thread grant) ───────────────────────
+# ── WS lifecycle: parse the open_thread grant ─────────────────────────────────
 def _thread_id(open_resp: Optional[Dict[str, Any]]) -> Optional[str]:
     """The thread id from an open_thread response (None if malformed)."""
     return ((open_resp or {}).get("thread") or {}).get("id")
@@ -192,7 +190,7 @@ async def _receive_loop(
     - ``turn_taking.typing``  → ``await on_typing(thread_id, typing)`` (if provided)
     - ``attached`` (handshake) → ignored
 
-    No reconnect: assumes a stable connection (D2). On close/error it logs and
+    No reconnect: assumes a stable connection. On close/error it logs and
     returns; the supervising task decides what to do next.
     """
     try:
@@ -219,11 +217,11 @@ async def _receive_loop(
         _log.warning("turn-taking WS loop ended: %s", e)
 
 
-# ── Delivery routing (chunk 7: reverse map + forwarder) ───────────────────────
+# ── Delivery routing: reverse map + forwarder ─────────────────────────────────
 # thread_id → (adapter, chat_id): where to deliver this thread's bubbles.
 _ROUTES: Dict[str, Tuple[Any, str]] = {}
 
-# The genuine WhatsAppAdapter.send, captured before patching (chunk 13/14), so
+# The genuine WhatsAppAdapter.send, captured before patching, so
 # _forward delivers bubbles via the ORIGINAL — they bypass our patch entirely,
 # which is what suppresses the agent's monolithic draft. No metadata marker needed.
 _ORIG_SEND: Optional[Callable] = None
@@ -276,7 +274,7 @@ async def _forward_typing(thread_id: Optional[str], is_typing: Optional[bool]) -
         _log.warning("turn-taking typing failed: %s", e)
 
 
-# ── Delivery bootstrap (chunk 8: open thread + route + start the WS loop) ──────
+# ── Delivery bootstrap: open thread + route + start the WS loop ────────────────
 async def _start_delivery(
     adapter: Any, chat_id: str, thread_id: Optional[str] = None
 ) -> Optional[str]:
@@ -285,7 +283,7 @@ async def _start_delivery(
     Returns the thread_id (use it for submit_messages / respond), or None if
     open_thread failed (fail-open: caller behaves as if turn-taking is off).
 
-    ponytail: spawn-and-forget — assumes a stable connection (D2), so no task
+    ponytail: spawn-and-forget — assumes a stable connection, so no task
     tracking / reconnect yet. Caller dedupes (one start per conversation); the
     receive loop connects in ~ms, well before bubbles come due (~reading delay).
     """
@@ -301,7 +299,7 @@ async def _start_delivery(
     return tid
 
 
-# ── Session → thread map (chunk 9: one thread per conversation) ───────────────
+# ── Session → thread map: one thread per conversation ─────────────────────────
 _SESSIONS: Dict[str, str] = {}  # Hermes session_id → turn-taking thread_id
 _OPEN_LOCK = asyncio.Lock()     # serializes thread-opens (rare) so a burst can't double-open
 
@@ -328,9 +326,9 @@ async def _ensure_thread(session_id: str, adapter: Any, chat_id: str) -> Optiona
         return tid
 
 
-# ── Decide gate (chunk 10: submit a batch, decide, stash the speak epoch) ─────
-# Per-turn epoch keyed by the platform message_id of the message that turn answers
-# (D8). Keying by message_id — not by a single per-session slot — binds each draft
+# ── Decide gate: submit a batch, decide, stash the speak epoch ────────────────
+# Per-turn epoch keyed by the platform message_id of the message that turn answers.
+# Keying by message_id — not by a single per-session slot — binds each draft
 # to its OWN epoch at respond time: the transform hook recovers this turn's
 # message_id from Hermes's per-task session contextvar (HERMES_SESSION_MESSAGE_ID,
 # set by the gateway before the turn runs and propagated into the worker thread via
@@ -389,7 +387,7 @@ async def _decide(
     return decision
 
 
-# ── Respond side (chunk 11: naturalize a draft, carry this turn's epoch) ───────
+# ── Respond side: naturalize a draft, carry this turn's epoch ──────────────────
 async def _respond(
     session_id: str, draft: str, epoch: Optional[int], system_prompt: Optional[str] = None
 ) -> bool:
@@ -417,7 +415,7 @@ async def _respond(
     return bool(res.get("scheduled"))
 
 
-# ── Hermes wiring (chunk 12: inbound events → service batch) ──────────────────
+# ── Hermes wiring: inbound events → service batch ─────────────────────────────
 def _to_messages(events: list) -> list[Dict[str, str]]:
     """Convert Hermes inbound MessageEvents into the service's [{sender, content}].
 
@@ -494,14 +492,14 @@ def _patch_send() -> bool:
     return True
 
 
-# ── Inbound gate (chunk 18: stay_silent → keep context, don't reply) ──────────
+# ── Inbound gate: stay_silent → keep context, don't reply ─────────────────────
 def _persist_observed(session_store: Any, session_id: str, events: list) -> None:
     """Append inbound messages to Hermes history WITHOUT dispatching the agent.
 
     Used on a stay_silent decision so a later "speak" turn still has the context
     the bot stayed quiet on. ``observed: True`` marks the rows as context (they
     replay as background, not as unanswered user turns). The ``[Name]`` prefix is
-    the Hermes-side authorship convention (D12), so the agent knows who said what.
+    the Hermes-side authorship convention, so the agent knows who said what.
     """
     for ev in events:
         text = (getattr(ev, "text", "") or "").strip()
@@ -548,7 +546,7 @@ async def _inbound_gate(
     return True  # speak, or None (fail-open: behave as if turn-taking is off)
 
 
-# ── Inbound patch (chunk 21: gate each message, no debounce) ──────────────────
+# ── Inbound patch: gate each message, no debounce ─────────────────────────────
 async def _handle_inbound(self: Any, event: Any) -> None:
     """Gate one inbound text message, then dispatch on "speak".
 
@@ -604,7 +602,7 @@ def _patch_inbound() -> bool:
     return True
 
 
-# ── Per-turn message_id binding (chunk 24: queue-robust correlation) ───────────
+# ── Per-turn message_id binding: queue-robust correlation ─────────────────────
 def _ensure_run_agent_patch(adapter: Any) -> None:
     """Wrap ``GatewayRunner._run_agent`` to stash this turn's message_id in
     ``_TT_MID_CTX`` for the transform hook to read.
@@ -655,7 +653,7 @@ def _ensure_run_agent_patch(adapter: Any) -> None:
         _log.warning("turn-taking: _run_agent patch deferred: %s", e)
 
 
-# ── Merged-turn epoch fix (chunk 25: keep the LATEST id when text is merged) ───
+# ── Merged-turn epoch fix: keep the LATEST id when text is merged ──────────────
 def _patch_merge_keep_latest_id() -> bool:
     """Make a turn formed by merging rapid follow-ups keep the LATEST message_id.
 
@@ -778,10 +776,21 @@ def register(ctx) -> None:
     """Plugin entry point: activate the send + inbound patches.
 
     Idle (no patching) when turn-taking isn't configured, so the plugin is a
-    no-op unless ``TURN_TAKING_SERVICE_URL`` / config.yaml is set.
+    no-op unless ``TURN_TAKING_SERVICE_URL`` / config.yaml is set — but the
+    ``/soul`` persona command is registered regardless (it uses the separate
+    Personas API, not the turn-taking service).
     """
+    try:
+        ctx.register_command(
+            "soul", soul.command,
+            description="Enhance the agent's SOUL.md persona via Humalike",
+            args_hint="enhance",
+        )
+        _log.info("turn-taking: registered /soul command")
+    except Exception as e:
+        _log.warning("turn-taking: could not register /soul command: %s", e)
     if not _service_url():
-        _log.info("turn-taking: no service_url configured — plugin idle")
+        _log.info("turn-taking: no service_url configured — turn-taking idle (/soul still available)")
         return
     sent = _patch_send()
     inbound = _patch_inbound()

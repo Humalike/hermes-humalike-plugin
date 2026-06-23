@@ -33,7 +33,7 @@ Configure in `~/.hermes/config.yaml`:
 
 ```yaml
 turn_taking:
-  service_url: "https://api.example.com"   # POSTs to {url}/v1/turn-taking/actions/*
+  service_url: "https://your-service-host"  # POSTs to {url}/v1/turn-taking/actions/*
   system_prompt: "You are ..."             # optional: agent identity for decide/respond
   log_requests: false                       # optional: dump request/response JSONL
 
@@ -42,10 +42,10 @@ streaming: false                            # reply replace must own the final t
 group_sessions_per_user: false              # one thread per group (group chats)
 ```
 
-Set the Clerk API key (sent as `Authorization: Bearer`):
+Set the API key (sent as `Authorization: Bearer`):
 
 ```bash
-export TURN_TAKING_API_KEY="your-clerk-api-key"   # or add to ~/.hermes/.env
+export TURN_TAKING_API_KEY="your-api-key"   # or add to ~/.hermes/.env
 ```
 
 Restart the gateway so the plugin loads.
@@ -72,6 +72,29 @@ When the agent stays quiet you'll see `decision=stay_silent` → `staying silent
 
 For exact request/response payloads, set `turn_taking.log_requests: true` and read
 `~/.hermes/logs/turn-taking-requests.jsonl` and `turn-taking-responses.jsonl`.
+
+## Persona: `/soul enhance`
+
+Send the bot `/soul enhance` to deepen your agent's `SOUL.md` persona via the
+[Humalike Personas API](https://docs.humalike.com). It's a registered slash command
+(shows up in `/commands`). The plugin reads the current `SOUL.md`, sends it to
+`actions/enhance` (async: it polls until the persona is rendered), backs the old
+file up to `SOUL.md.bak`, and writes the enhanced persona back — it takes effect on
+the next message. If `SOUL.md` has no persona yet (just the template), it tells you
+to add a seed first — generating one from scratch is a later addition.
+
+Note: plugin command handlers receive only the args, not the sender, so this can't
+be restricted to DMs — anyone in a chat with the bot can run it. Restart the gateway
+after installing/updating so the command registers.
+
+```yaml
+turn_taking:
+  personas_api_url: "https://api.humalike.com"  # optional, this is the default
+  soul_path: "~/.hermes/SOUL.md"                # optional; point at docker/SOUL.md to edit the repo copy
+  soul_grounding: "off"                          # off | web | research (research can take minutes)
+```
+
+The Personas API reuses `TURN_TAKING_API_KEY` unless you set `HUMALIKE_API_KEY`.
 
 ## Failure behavior
 
