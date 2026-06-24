@@ -13,7 +13,7 @@ from typing import Any, Awaitable, Callable, Dict, Optional, Tuple
 
 import httpx
 
-from . import soul
+from . import social_learning, soul
 
 _log = logging.getLogger("hermes.plugins.turn_taking")
 
@@ -82,9 +82,9 @@ def _persona(adapter: Any = None, session_id: Optional[str] = None) -> Optional[
         pass
     if session_id:
         try:
-            from hermes_plugins.social_learning import _CACHE  # noqa: PLC0415
-
-            card = _CACHE.get(session_id)
+            # Embedded social-learning module (same gateway process, same _CACHE
+            # the pre_llm_call hook fills) — no cross-plugin import.
+            card = social_learning._CACHE.get(session_id)
             if card:
                 parts.append(card)
         except Exception:
@@ -149,10 +149,10 @@ async def open_thread(thread_id: Optional[str] = None) -> Optional[Dict[str, Any
 
 async def submit_messages(
     thread_id: str,
-    messages: list[Dict[str, str]],
+    messages: list[Dict[str, Any]],
     system_prompt: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Decide speak/stay_silent for a batch of {sender, content}. Returns {decision, turn_epoch}."""
+    """Decide speak/stay_silent for a batch of {sender, content, has_media?}. Returns {decision, turn_epoch}."""
     body: Dict[str, Any] = {"thread_id": thread_id, "messages": messages}
     if system_prompt:
         body["system_prompt"] = system_prompt[:_SYSTEM_PROMPT_CAP]
@@ -423,20 +423,46 @@ async def _respond(
 
 
 # ── Hermes wiring: inbound events → service batch ─────────────────────────────
-def _to_messages(events: list) -> list[Dict[str, str]]:
-    """Convert Hermes inbound MessageEvents into the service's [{sender, content}].
+# Placeholder content sent to the decide service for media with no caption, keyed
+# by MessageType.value. The decide model can't read media; ``has_media`` makes the
+# service short-circuit to "speak" without an LLM call. A non-empty content also
+# keeps the contract's min_length=1 and gives later text turns some context.
+_MEDIA_PLACEHOLDERS = {
+    "photo": "[image]",
+    "video": "[video]",
+    "voice": "[voice message]",
+    "audio": "[audio]",
+    "document": "[document]",
+    "sticker": "[sticker]",
+}
 
-    Duck-typed (event.text, event.source.user_name) so it needs no Hermes import.
-    Skips empty text; applies the contract caps (≤20 messages, sender ≤255,
-    content ≤4000). Pass a single event as ``[event]``.
+
+def _to_messages(events: list) -> list[Dict[str, Any]]:
+    """Convert Hermes inbound MessageEvents into the service's
+    [{sender, content, has_media?}].
+
+    Duck-typed (event.text, event.source.user_name, event.message_type) so it
+    needs no Hermes import. Text events with empty text are skipped; media events
+    are kept with a placeholder content + ``has_media=True`` so the service speaks
+    (no LLM call) and the reply still naturalizes. Applies the contract caps
+    (≤20 messages, sender ≤255, content ≤4000). Pass a single event as ``[event]``.
     """
-    out: list[Dict[str, str]] = []
+    out: list[Dict[str, Any]] = []
     for ev in events:
         content = (getattr(ev, "text", "") or "").strip()
+        mtype = getattr(getattr(ev, "message_type", None), "value", "") or ""
+        # WhatsApp only emits "text" or a media type (commands arrive as text), so
+        # anything else — or any attached media — marks this as a media message.
+        has_media = bool(getattr(ev, "media_urls", None)) or mtype not in ("", "text", "command")
         if not content:
-            continue
+            if not has_media:
+                continue
+            content = _MEDIA_PLACEHOLDERS.get(mtype, "[media]")
         sender = getattr(getattr(ev, "source", None), "user_name", None) or "Unknown"
-        out.append({"sender": sender[:255], "content": content[:4000]})
+        msg: Dict[str, Any] = {"sender": sender[:255], "content": content[:4000]}
+        if has_media:
+            msg["has_media"] = True
+        out.append(msg)
     return out[-20:]
 
 
@@ -606,6 +632,70 @@ def _patch_inbound() -> bool:
 
     _enqueue_text_event._tt_patched = True  # type: ignore[attr-defined]
     WhatsAppAdapter._enqueue_text_event = _enqueue_text_event
+    return True
+
+
+def _patch_poll_messages() -> bool:
+    """Route EVERY inbound event through the turn-taking gate, not just text.
+
+    Hermes's ``_poll_messages`` sends TEXT to ``_enqueue_text_event`` (the gate,
+    patched above) but dispatches media straight to ``handle_message`` — so
+    images/gifs/videos/voice/docs bypass turn-taking entirely. This replaces the
+    loop so every built event goes through ``_enqueue_text_event``; ``_to_messages``
+    flags media with a placeholder so the service speaks and the reply naturalizes.
+    The event keeps its real ``message_type``/``media_urls``, so the agent still
+    gets the actual media (vision/STT/doc handling unchanged). Idempotent.
+
+    ponytail: this copies Hermes's poll loop (HTTP poll + bridge-exit checks +
+    error handling); if hermes-agent changes that loop, re-sync this copy. Safe to
+    patch on the class because plugins register (run.py:4419) before adapters
+    connect and start this task (run.py:4535).
+    """
+    try:
+        from gateway.platforms.whatsapp import WhatsAppAdapter
+    except Exception as e:
+        _log.warning("turn-taking: cannot patch poll loop (no WhatsAppAdapter): %s", e)
+        return False
+    if getattr(WhatsAppAdapter._poll_messages, "_tt_patched", False):
+        return False
+
+    async def _poll_messages(self) -> None:
+        import aiohttp
+
+        while self._running:
+            if not self._http_session:
+                break
+            bridge_exit = await self._check_managed_bridge_exit()
+            if bridge_exit:
+                print(f"[{self.name}] {bridge_exit}")
+                break
+            try:
+                async with self._http_session.get(
+                    f"http://127.0.0.1:{self._bridge_port}/messages",
+                    timeout=aiohttp.ClientTimeout(total=30),
+                ) as resp:
+                    if resp.status == 200:
+                        messages = await resp.json()
+                        for msg_data in messages:
+                            event = await self._build_message_event(msg_data)
+                            if event:
+                                # Text AND media → the gate. _enqueue_text_event is
+                                # patched to create_task(_handle_inbound).
+                                self._enqueue_text_event(event)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                bridge_exit = await self._check_managed_bridge_exit()
+                if bridge_exit:
+                    print(f"[{self.name}] {bridge_exit}")
+                    break
+                print(f"[{self.name}] Poll error: {e}")
+                await asyncio.sleep(5)
+
+            await asyncio.sleep(1)  # Poll interval
+
+    _poll_messages._tt_patched = True  # type: ignore[attr-defined]
+    WhatsAppAdapter._poll_messages = _poll_messages
     return True
 
 
@@ -800,11 +890,21 @@ def register(ctx) -> None:
         soul.maybe_auto_enhance()  # one-shot on first startup (marker-guarded)
     except Exception as e:
         _log.warning("turn-taking: auto-enhance skipped: %s", e)
+    # Embedded social-learning voice card: register regardless of the turn-taking
+    # service (it's gated on its own ``social_learning.service_url`` and no-ops
+    # until a card is cached). Fills the _CACHE that both the agent prompt (this
+    # hook) and turn-taking's _persona() read.
+    try:
+        ctx.register_hook("pre_llm_call", social_learning.on_pre_llm_call)
+        _log.info("turn-taking: registered social-learning pre_llm_call hook")
+    except Exception as e:
+        _log.warning("turn-taking: could not register social-learning hook: %s", e)
     if not _service_url():
         _log.info("turn-taking: no service_url configured — turn-taking idle (/soul still available)")
         return
     sent = _patch_send()
     inbound = _patch_inbound()
+    poll = _patch_poll_messages()
     merge_fix = _patch_merge_keep_latest_id()
     hooked = False
     try:
@@ -812,5 +912,5 @@ def register(ctx) -> None:
         hooked = True
     except Exception as e:
         _log.warning("turn-taking: could not register transform_llm_output hook: %s", e)
-    _log.info("turn-taking registered (send=%s, inbound=%s, merge_fix=%s, transform=%s)",
-              sent, inbound, merge_fix, hooked)
+    _log.info("turn-taking registered (send=%s, inbound=%s, poll=%s, merge_fix=%s, transform=%s)",
+              sent, inbound, poll, merge_fix, hooked)
