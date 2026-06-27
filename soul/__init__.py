@@ -61,7 +61,7 @@ def _api_key() -> str:
 
 def _soul_path() -> Path:
     """Where to read/write the persona. Default: ~/.hermes/SOUL.md (what the
-    plugin's _persona() actually reads at runtime). Override via env or
+    plugin's _build_system_prompt_for_turn_taking() actually reads at runtime). Override via env or
     ``turn_taking.soul_path`` in config.yaml (e.g. point it at docker/SOUL.md)."""
     p = os.getenv("HERMES_SOUL_PATH") or str(_cfg().get("soul_path") or "")
     return Path(p).expanduser() if p else _HERMES_CONFIG.with_name("SOUL.md")

@@ -3,7 +3,7 @@
 Matches the agent's reply style to how each conversation actually talks. Lives
 here (not as a separate plugin) so the one Humalike plugin owns it: the same
 ``_CACHE`` feeds BOTH the agent's reply (via the ``pre_llm_call`` hook below) and
-turn-taking's decide/naturalize voice (via ``_persona()`` in __init__.py).
+turn-taking's decide/naturalize voice (via ``_build_system_prompt_for_turn_taking()`` in core.py).
 
 Two clocks in one hook
 ======================

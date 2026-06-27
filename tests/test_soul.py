@@ -1,8 +1,8 @@
 """Checks for the SOUL.md persona helpers.
 
-soul.py has no relative imports, so we load it straight from its file path — the
-plugin's __init__.py only imports under the Hermes loader, which would break
-pytest's package collection. Run directly:  python3 tests/test_soul.py
+soul/__init__.py has no relative imports, so we load it straight from its file
+path — the plugin's __init__.py only imports under the Hermes loader, which would
+break pytest's package collection. Run directly:  python3 tests/test_soul.py
 (or via pytest from inside tests/:  cd tests && pytest)
 """
 
@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 
 _spec = importlib.util.spec_from_file_location(
-    "tt_soul", Path(__file__).resolve().parent.parent / "soul.py"
+    "tt_soul", Path(__file__).resolve().parent.parent / "soul" / "__init__.py"
 )
 soul = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(soul)
