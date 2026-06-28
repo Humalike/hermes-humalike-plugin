@@ -20,10 +20,20 @@ from typing import Any, Callable, Dict, Optional, Tuple
 # thread_id → (adapter, chat_id): where to deliver this thread's bubbles.
 ROUTES: Dict[str, Tuple[Any, str]] = {}
 
-# The genuine adapter.send, captured before patching, so _forward delivers
-# bubbles via the ORIGINAL — they bypass our patch entirely, which is what
-# suppresses the agent's monolithic draft. No metadata marker needed.
-ORIG_SEND: Optional[Callable] = None
+# The genuine adapter.send per adapter class, captured before patching, so
+# _forward delivers bubbles via the ORIGINAL — they bypass our patch entirely,
+# which is what suppresses the agent's monolithic draft. No metadata marker needed.
+# Keyed by adapter class so WhatsApp and Telegram can be patched at once without a
+# single global clobbering one platform's original with the other's.
+ORIG_SEND: Dict[type, Callable] = {}
+
+# The genuine adapter.handle_message per adapter class, captured before patching
+# handle_message to gate media. Only platforms whose handle_message is gated have
+# an entry; _handle_inbound dispatches a "speak" turn through this genuine handler
+# (so it doesn't recurse into the gate). No entry (e.g. WhatsApp, whose media goes
+# through the patched _poll loop, not a gated handle_message) → _handle_inbound
+# falls back to the adapter's own (unpatched) handle_message.
+ORIG_HANDLE: Dict[type, Callable] = {}
 
 # ── Session → thread map: one thread per conversation ─────────────────────────
 SESSIONS: Dict[str, str] = {}  # Hermes session_id → turn-taking thread_id

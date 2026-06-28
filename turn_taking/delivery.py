@@ -36,12 +36,14 @@ async def _forward(thread_id: Optional[str], content: Optional[str]) -> None:
         _log.warning("turn-taking: no route for thread %s — dropping bubble", thread_id)
         return
     adapter, chat_id = route
+    orig = state.ORIG_SEND.get(type(adapter))
     _log.info("tt forward: tid=%s chat=%s → deliver bubble (via=%s) | %r",
-              thread_id, chat_id, "orig" if state.ORIG_SEND is not None else "plain", content[:60])
-    # Deliver via the original send so the bubble bypasses our patch (which drops
-    # the agent's draft). Before _patch_send runs, adapter.send IS the original.
-    if state.ORIG_SEND is not None:
-        await state.ORIG_SEND(adapter, chat_id, content)
+              thread_id, chat_id, "orig" if orig is not None else "plain", content[:60])
+    # Deliver via this adapter class's original send so the bubble bypasses our
+    # patch (which drops the agent's draft). Before _patch_send runs, adapter.send
+    # IS the original.
+    if orig is not None:
+        await orig(adapter, chat_id, content)
     else:
         await adapter.send(chat_id, content)
 

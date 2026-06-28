@@ -10,10 +10,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+from typing import Any, Callable
 
 from . import state
-from .core import _inbound_gate, _build_system_prompt_for_turn_taking
+from .core import _inbound_gate, _build_system_prompt_for_turn_taking, _decide
+from .service import _to_messages
 
 _log = logging.getLogger("hermes.plugins.turn_taking")
 
@@ -21,50 +22,76 @@ _reply_anchor_patched = False  # idempotency for _patch__reply_anchor_for_event
 _merge_patched = False  # idempotency for _patch_merge_pending_message_event
 
 
-# ── Hermes wiring: monkeypatch WhatsAppAdapter.send ───────────────────────────
+def _platform_adapter_classes() -> list:
+    """The adapter classes turn-taking patches, those importable in this gateway.
+
+    Each platform is imported independently so a build without one (e.g. no
+    Telegram deps) just skips it. Both inherit ``BasePlatformAdapter`` and share
+    the ``send`` / ``_enqueue_text_event`` surface, so the same wrappers fit both.
+    """
+    classes = []
+    try:
+        from gateway.platforms.whatsapp import WhatsAppAdapter
+        classes.append(WhatsAppAdapter)
+    except Exception as e:
+        _log.warning("turn-taking: WhatsAppAdapter unavailable: %s", e)
+    try:
+        from gateway.platforms.telegram import TelegramAdapter
+        classes.append(TelegramAdapter)
+    except Exception as e:
+        _log.warning("turn-taking: TelegramAdapter unavailable: %s", e)
+    return classes
+
+
+# ── Hermes wiring: monkeypatch each adapter's send ────────────────────────────
 def _patch_send() -> bool:
-    """Wrap ``WhatsAppAdapter.send``: turn the agent's draft into bubbles.
+    """Wrap each platform adapter's ``send``: turn the agent's draft into bubbles.
 
     When ``send`` carries the agent's reply for a "speak" turn, naturalize it
     (``_respond`` → bubbles delivered over WS) INSTEAD of sending the raw draft —
     that avoids the duplicate (whole draft + its split bubbles). Everything else
-    passes straight through: errors, command replies, and — via ``_ORIG_SEND`` —
-    the bubbles themselves.
+    passes straight through: errors, command replies, and — via
+    ``state.ORIG_SEND`` — the bubbles themselves.
 
-    The "this is the draft" signal is ``_PENDING_ANSWERS`` (keyed by exact answer
+    The "this is the draft" signal is ``PENDING_ANSWERS`` (keyed by exact answer
     text), registered by the transform hook for the answer it naturalized; the send
     whose content matches is dropped, so a racing tool-notice can't be consumed by
-    mistake. The draft still reaches Hermes history (persisted before send). Idempotent.
+    mistake. The draft still reaches Hermes history (persisted before send).
+
+    Patches every importable adapter class, each wrapper closing over its OWN
+    class's original via a factory so a Telegram bubble is never sent through
+    WhatsApp's send and vice versa. Idempotent.
     """
-    try:
-        from gateway.platforms.whatsapp import WhatsAppAdapter
-    except Exception as e:
-        _log.warning("turn-taking: cannot patch send (no WhatsAppAdapter): %s", e)
-        return False
-    if getattr(WhatsAppAdapter.send, "_tt_patched", False):
-        return False  # already patched
-    _orig = WhatsAppAdapter.send
-    state.ORIG_SEND = _orig  # so _forward can deliver bubbles via the genuine send
+    patched_any = False
+    for cls in _platform_adapter_classes():
+        if getattr(cls.send, "_tt_patched", False):
+            continue
+        _orig = cls.send
+        state.ORIG_SEND[cls] = _orig  # so _forward delivers bubbles via the genuine send
 
-    async def _send(self, chat_id, content, reply_to=None, metadata=None):
-        pend = state.PENDING_ANSWERS.get(chat_id)
-        key = (content or "").strip()
-        if pend is not None and key in pend:
-            pend.discard(key)
-            if not pend:
-                state.PENDING_ANSWERS.pop(chat_id, None)
-            # This send IS the agent's final answer — naturalized by
-            # transform_llm_output and delivered as bubbles over WS, so drop the
-            # raw copy. Empty content → original returns a no-send success.
-            _log.info("tt send: chat=%s → SUPPRESS (matched answer, bubbles via WS) | %r",
-                      chat_id, key[:50])
-            return await _orig(self, chat_id, "", reply_to=reply_to, metadata=metadata)
-        _log.info("tt send: chat=%s → passthrough | %r", chat_id, key[:50])
-        return await _orig(self, chat_id, content, reply_to=reply_to, metadata=metadata)
+        def _make_send(orig):
+            async def _send(self, chat_id, content, reply_to=None, metadata=None):
+                pend = state.PENDING_ANSWERS.get(chat_id)
+                key = (content or "").strip()
+                if pend is not None and key in pend:
+                    pend.discard(key)
+                    if not pend:
+                        state.PENDING_ANSWERS.pop(chat_id, None)
+                    # This send IS the agent's final answer — naturalized by
+                    # transform_llm_output and delivered as bubbles over WS, so drop
+                    # the raw copy. Empty content → original returns a no-send success.
+                    _log.info("tt send: chat=%s → SUPPRESS (matched answer, bubbles via WS) | %r",
+                              chat_id, key[:50])
+                    return await orig(self, chat_id, "", reply_to=reply_to, metadata=metadata)
+                _log.info("tt send: chat=%s → passthrough | %r", chat_id, key[:50])
+                return await orig(self, chat_id, content, reply_to=reply_to, metadata=metadata)
+            return _send
 
-    _send._tt_patched = True  # type: ignore[attr-defined]
-    WhatsAppAdapter.send = _send
-    return True
+        _send = _make_send(_orig)
+        _send._tt_patched = True  # type: ignore[attr-defined]
+        cls.send = _send
+        patched_any = True
+    return patched_any
 
 
 # ── Inbound patch: gate each message, no debounce ─────────────────────────────
@@ -100,26 +127,34 @@ async def _handle_inbound(self: Any, event: Any) -> None:
         _log.warning("turn-taking inbound gate failed: %s", e)
         proceed = True  # fail-open
     if proceed:
-        await self.handle_message(event)
+        # Dispatch a "speak" turn through the GENUINE handler. On a platform whose
+        # handle_message is gated (Telegram, for media), self.handle_message is our
+        # gate — calling it would recurse; ORIG_HANDLE holds the real one. WhatsApp
+        # has no entry (its handle_message is unpatched) → use it directly.
+        orig = state.ORIG_HANDLE.get(type(self))
+        if orig is not None:
+            await orig(self, event)
+        else:
+            await self.handle_message(event)
 
 
 def _patch__enqueue_text_event() -> bool:
-    """Replace ``WhatsAppAdapter._enqueue_text_event``: gate each message instead
-    of Hermes's 5s merge-debounce. Idempotent. Returns True if patched."""
-    try:
-        from gateway.platforms.whatsapp import WhatsAppAdapter
-    except Exception as e:
-        _log.warning("turn-taking: cannot patch inbound (no WhatsAppAdapter): %s", e)
-        return False
-    if getattr(WhatsAppAdapter._enqueue_text_event, "_tt_patched", False):
-        return False
+    """Replace each adapter's ``_enqueue_text_event``: gate each message instead
+    of Hermes's merge-debounce. Patches every importable adapter class (the gate is
+    platform-agnostic — it duck-types the event). Idempotent. Returns True if any
+    class was patched."""
+    patched_any = False
+    for cls in _platform_adapter_classes():
+        if getattr(cls._enqueue_text_event, "_tt_patched", False):
+            continue
 
-    def _enqueue_text_event(self, event):
-        asyncio.create_task(_handle_inbound(self, event))
+        def _enqueue_text_event(self, event):
+            asyncio.create_task(_handle_inbound(self, event))
 
-    _enqueue_text_event._tt_patched = True  # type: ignore[attr-defined]
-    WhatsAppAdapter._enqueue_text_event = _enqueue_text_event
-    return True
+        _enqueue_text_event._tt_patched = True  # type: ignore[attr-defined]
+        cls._enqueue_text_event = _enqueue_text_event
+        patched_any = True
+    return patched_any
 
 
 def _patch__poll_messages() -> bool:
@@ -183,6 +218,117 @@ def _patch__poll_messages() -> bool:
 
     _poll_messages._tt_patched = True  # type: ignore[attr-defined]
     WhatsAppAdapter._poll_messages = _poll_messages
+    return True
+
+
+# ── Telegram media gate: route handle_message through the turn-taking gate ─────
+def _patch_telegram_handle_message() -> bool:
+    """Gate Telegram media by routing ``TelegramAdapter.handle_message`` through the
+    same gate as text.
+
+    Telegram text is gated at ``_enqueue_text_event``, but media
+    (photos/voice/docs/video) is dispatched straight to ``handle_message``, so it
+    would bypass turn-taking. Wrapping ``handle_message`` sends every such event
+    through ``_handle_inbound``; the genuine handler is captured in
+    ``state.ORIG_HANDLE`` so a "speak" turn dispatches via it instead of recursing.
+
+    Telegram-only: WhatsApp routes media through the patched ``_poll_messages``
+    loop, so its ``handle_message`` stays unpatched (and ``_handle_inbound`` falls
+    back to it directly). Idempotent.
+    """
+    try:
+        from gateway.platforms.telegram import TelegramAdapter
+    except Exception as e:
+        _log.warning("turn-taking: cannot patch Telegram media gate (no TelegramAdapter): %s", e)
+        return False
+    if getattr(TelegramAdapter.handle_message, "_tt_patched", False):
+        return False
+    _orig = TelegramAdapter.handle_message  # inherited from base; genuine handler
+    state.ORIG_HANDLE[TelegramAdapter] = _orig
+
+    async def handle_message(self, event):
+        await _handle_inbound(self, event)
+
+    handle_message._tt_patched = True  # type: ignore[attr-defined]
+    TelegramAdapter.handle_message = handle_message
+    return True
+
+
+# ── Group observation gate: let turn-taking jump into unmentioned chatter ──────
+async def _handle_observed_group(self: Any, event: Any, replay: Callable[[], Any]) -> None:
+    """Gate one unmentioned group message: dispatch on an explicit "speak",
+    otherwise fall back to the genuine observe (``replay``) so it's persisted as
+    context.
+
+    Fail-CLOSED on purpose (unlike the DM gate, which fails open to a reply):
+    anything but an explicit "speak" — stay_silent OR service unavailable — routes
+    to observe, so a down turn-taking service can't make the bot answer every group
+    message. Correlation/epoch are stashed by ``_decide`` exactly as on the DM path.
+    """
+    try:
+        state.LOOP = asyncio.get_running_loop()
+    except RuntimeError:
+        pass
+    _patch__reply_anchor_for_event(self)
+    message_id = str(getattr(event, "message_id", "") or "")
+    source = event.source
+    decision = None
+    store = getattr(self, "_session_store", None)
+    if store is not None:
+        try:
+            session_id = store.get_or_create_session(source).session_id
+            messages = _to_messages([event])
+            if messages:
+                decision = await _decide(
+                    session_id, self, source.chat_id, messages,
+                    _build_system_prompt_for_turn_taking(self, session_id), message_id,
+                )
+        except Exception as e:
+            _log.warning("turn-taking observed-group gate failed: %s", e)
+            decision = None
+    _log.info("tt group-observe: chat=%s mid=%s decision=%s",
+              getattr(source, "chat_id", None), message_id, decision)
+    if decision == "speak":
+        orig = state.ORIG_HANDLE.get(type(self))
+        if orig is not None:
+            await orig(self, event)
+        else:
+            await self.handle_message(event)
+    else:
+        replay()  # genuine observe: persist as context (fail-closed)
+
+
+def _patch_telegram_observe_group() -> bool:
+    """Route unmentioned Telegram group messages through the turn-taking gate.
+
+    ``_observe_unmentioned_group_message`` is the single funnel every untriggered
+    group message (text/media/location) reaches. Wrapping it lets turn-taking
+    decide to jump in unprompted (speak → dispatch) while keeping the original
+    silent-observe behaviour for everything else. Telegram-only; idempotent.
+
+    ponytail: gating observed chatter opens a turn-taking thread per active group
+    even when the bot mostly stays silent — the cost of "see everything". If that
+    bites in busy groups, gate thread-open on a cheaper pre-check.
+    """
+    try:
+        from gateway.platforms.telegram import TelegramAdapter
+    except Exception as e:
+        _log.warning("turn-taking: cannot patch Telegram group observe (no TelegramAdapter): %s", e)
+        return False
+    if getattr(TelegramAdapter._observe_unmentioned_group_message, "_tt_patched", False):
+        return False
+    _orig = TelegramAdapter._observe_unmentioned_group_message
+
+    def _observe(self, message, msg_type, update_id=None, event=None):
+        try:
+            ev = event or self._build_message_event(message, msg_type, update_id=update_id)
+        except Exception:
+            return _orig(self, message, msg_type, update_id=update_id, event=event)
+        replay = lambda: _orig(self, message, msg_type, update_id=update_id, event=ev)
+        asyncio.create_task(_handle_observed_group(self, ev, replay))
+
+    _observe._tt_patched = True  # type: ignore[attr-defined]
+    TelegramAdapter._observe_unmentioned_group_message = _observe
     return True
 
 
