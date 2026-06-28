@@ -13,7 +13,7 @@ import logging
 from typing import Any, Callable
 
 from . import state
-from .core import _inbound_gate, _build_system_prompt_for_turn_taking, _decide
+from .core import _inbound_gate, _build_system_prompt_for_turn_taking, _decide, _delivery_meta
 from .service import _to_messages
 
 _log = logging.getLogger("hermes.plugins.turn_taking")
@@ -282,6 +282,7 @@ async def _handle_observed_group(self: Any, event: Any, replay: Callable[[], Any
                 decision = await _decide(
                     session_id, self, source.chat_id, messages,
                     _build_system_prompt_for_turn_taking(self, session_id), message_id,
+                    _delivery_meta(event),
                 )
         except Exception as e:
             _log.warning("turn-taking observed-group gate failed: %s", e)

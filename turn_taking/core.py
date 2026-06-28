@@ -73,6 +73,18 @@ def _build_system_prompt_for_turn_taking(adapter: Any = None, session_id: Option
         return None
 
 
+def _delivery_meta(event: Any) -> Dict[str, str]:
+    """Opaque per-turn delivery hints to round-trip through respond → bubble.
+
+    Currently just the forum-topic id: Telegram sets ``source.thread_id`` for forum
+    topics (and the General-topic sentinel), and its ``send`` places a bubble in a
+    topic via ``metadata["thread_id"]``. Empty for non-topic chats and WhatsApp
+    groups (no ``thread_id``), so delivery is unchanged there.
+    """
+    tid = getattr(getattr(event, "source", None), "thread_id", None)
+    return {"thread_id": str(tid)} if tid else {}
+
+
 # ── Decide gate: submit a batch, decide, stash the speak epoch ────────────────
 async def _decide(
     session_id: str,
@@ -81,6 +93,7 @@ async def _decide(
     messages: list[Dict[str, str]],
     system_prompt: Optional[str] = None,
     message_id: str = "",
+    delivery_meta: Optional[Dict[str, str]] = None,
 ) -> Optional[str]:
     """Submit a batch and return the decision ("speak" / "stay_silent").
 
@@ -102,6 +115,8 @@ async def _decide(
         # the turn then degrades to a plain (un-naturalized) reply rather than risk a
         # mismatched epoch. WhatsApp always carries one, so this is the rare path.
         state.EPOCH_BY_MESSAGE_ID[message_id] = epoch
+        if delivery_meta:
+            state.META_BY_MESSAGE_ID[message_id] = delivery_meta
     _log.info("tt decide: session=%s chat=%s mid=%s decision=%s epoch=%s",
               session_id, chat_id, message_id, decision, epoch)
     return decision
@@ -109,7 +124,8 @@ async def _decide(
 
 # ── Respond side: naturalize a draft, carry this turn's epoch ──────────────────
 async def _respond(
-    session_id: str, draft: str, epoch: Optional[int], system_prompt: Optional[str] = None
+    session_id: str, draft: str, epoch: Optional[int], system_prompt: Optional[str] = None,
+    metadata: Optional[Dict[str, str]] = None,
 ) -> bool:
     """Naturalize a completed draft using THIS turn's epoch (resolved by the
     transform hook from the per-turn message_id) and call respond. In WS mode the
@@ -125,7 +141,7 @@ async def _respond(
         return False  # this session never decided speak
     _log.info("tt respond: session=%s tid=%s epoch=%s → naturalizing | %r",
               session_id, tid, epoch, (draft or "").strip()[:60])
-    res = await respond(tid, draft, epoch, system_prompt)
+    res = await respond(tid, draft, epoch, system_prompt, metadata)
     if not res or res.get("superseded"):
         _log.info("tt respond: session=%s → DROPPED (superseded=%s / no response)",
                   session_id, bool(res and res.get("superseded")))
@@ -178,7 +194,10 @@ async def _inbound_gate(
     messages = _to_messages(events)
     if not messages:
         return True  # nothing to decide → let Hermes handle it
-    decision = await _decide(session_id, adapter, chat_id, messages, system_prompt, message_id)
+    delivery_meta = _delivery_meta(events[-1]) if events else {}
+    decision = await _decide(
+        session_id, adapter, chat_id, messages, system_prompt, message_id, delivery_meta
+    )
     if decision == "stay_silent":
         _persist_observed(session_store, session_id, events)
         _log.info("tt gate: session=%s chat=%s → STAY_SILENT (persisted %d observed msg(s), no dispatch)",

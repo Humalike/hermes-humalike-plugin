@@ -48,6 +48,14 @@ OPEN_LOCK = asyncio.Lock()     # serializes thread-opens (rare) so a burst can't
 # copy_context). That is ordering-independent and needs no interrupt to stay correct.
 EPOCH_BY_MESSAGE_ID: Dict[str, int] = {}  # message_id → turn_epoch of the "speak" decision
 
+# Per-turn opaque delivery hints, keyed by the same message_id as the epoch above
+# and with the same lifecycle (stashed at decide on "speak", popped by the transform
+# hook). Round-tripped through the service's respond.metadata → echoed verbatim on
+# every delivered bubble frame → read by delivery._forward. First use: the Telegram
+# forum-topic id ({"thread_id": ...}) so a bubble lands in the source topic, not
+# General. Empty/absent for non-topic chats and WhatsApp.
+META_BY_MESSAGE_ID: Dict[str, Dict[str, str]] = {}
+
 # Per-turn RAW message_id, carried into the turn's worker thread and read by the
 # transform hook. Bound as a side effect of GatewayRunner._reply_anchor_for_event
 # (see _patch__reply_anchor_for_event), NOT in the inbound task: a queued message's

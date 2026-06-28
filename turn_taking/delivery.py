@@ -23,8 +23,15 @@ def _set_route(thread_id: str, adapter: Any, chat_id: str) -> None:
     state.ROUTES[thread_id] = (adapter, chat_id)
 
 
-async def _forward(thread_id: Optional[str], content: Optional[str]) -> None:
-    """on_message callback: route one delivered bubble to its WhatsApp chat.
+async def _forward(
+    thread_id: Optional[str], content: Optional[str], metadata: Optional[dict] = None
+) -> None:
+    """on_message callback: route one delivered bubble to its chat.
+
+    ``metadata`` is the service's verbatim echo of the respond's metadata — here the
+    forum-topic id ({"thread_id": ...}), passed straight to ``send`` so the bubble
+    lands in the source topic (Telegram reads ``metadata["thread_id"]``; WhatsApp
+    ignores it). None/empty → normal placement.
 
     No route (e.g. after a restart lost the map) → log + drop, never crash the
     receive loop.
@@ -37,15 +44,16 @@ async def _forward(thread_id: Optional[str], content: Optional[str]) -> None:
         return
     adapter, chat_id = route
     orig = state.ORIG_SEND.get(type(adapter))
-    _log.info("tt forward: tid=%s chat=%s → deliver bubble (via=%s) | %r",
-              thread_id, chat_id, "orig" if orig is not None else "plain", content[:60])
+    _log.info("tt forward: tid=%s chat=%s → deliver bubble (via=%s, topic=%s) | %r",
+              thread_id, chat_id, "orig" if orig is not None else "plain",
+              (metadata or {}).get("thread_id"), content[:60])
     # Deliver via this adapter class's original send so the bubble bypasses our
     # patch (which drops the agent's draft). Before _patch_send runs, adapter.send
-    # IS the original.
+    # IS the original. Pass metadata so a forum-topic bubble lands in its topic.
     if orig is not None:
-        await orig(adapter, chat_id, content)
+        await orig(adapter, chat_id, content, metadata=metadata or None)
     else:
-        await adapter.send(chat_id, content)
+        await adapter.send(chat_id, content, metadata=metadata or None)
 
 
 async def _forward_typing(thread_id: Optional[str], is_typing: Optional[bool]) -> None:
