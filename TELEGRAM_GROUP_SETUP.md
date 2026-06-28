@@ -31,10 +31,15 @@ wtedy bot „widzi" wiadomość, ale nigdy nie odpowiada.
 - **Grupa (bez parowania każdej osoby):** autoryzuj **cały czat po ID** — wtedy
   każdy członek grupy działa automatycznie:
   ```
-  TELEGRAM_GROUP_ALLOWED_CHATS=<chat_id>      # np. -5359080915; * = wszystkie grupy
+  TELEGRAM_GROUP_ALLOWED_CHATS=<chat_id1>,<chat_id2>   # lista przecinkami; * = wszystkie grupy
   ```
   Chat_id grupy znajdziesz w logach gatewaya: `tt inbound: chat=<chat_id>`
   (grupy Telegrama mają ujemne ID).
+
+  ⚠️ **Każda grupa ma WŁASNY chat_id** — grupa z topikami (forum) to inny czat niż
+  zwykła grupa. Dodanie jednej nie autoryzuje drugiej; każdą nową grupę trzeba
+  dopisać do listy (przecinkami) i zrestartować gateway. Objaw pominięcia:
+  `Unauthorized user` mimo że „inna grupa działa".
 
   Alternatywy: `TELEGRAM_GROUP_ALLOWED_USERS=<id1>,<id2>` (tylko wymienione osoby),
   albo parowanie każdej osoby z osobna.
@@ -48,7 +53,8 @@ Sprawdź w logach: `✓ telegram connected` oraz `tt inbound / tt decide / tt fo
 
 ## Aktualna konfiguracja tego setupu
 - Bot: `t.me/minimiliani_bot`
-- Grupa autoryzowana: `TELEGRAM_GROUP_ALLOWED_CHATS=-5359080915`
+- Grupa autoryzowana: `TELEGRAM_GROUP_ALLOWED_CHATS=-1004418899432` (grupa z topikami;
+  zastąpiła starą `-5359080915`, którą przekonwertowano na forum)
 - DM: sparowany tylko właściciel (`hermes pairing list`)
 
 ## Szybka diagnoza „bot nie odpowiada w grupie"
