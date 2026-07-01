@@ -60,3 +60,9 @@ Restart the Hermes gateway so the plugin and its `/soul enhance` command registe
   first-startup auto-enhance) does anything — a bare template is skipped.
 - Disable the one-time auto-enhance with `soul_auto_enhance: false` or env
   `HERMES_SOUL_AUTO_ENHANCE=false`.
+- Telegram group chats need privacy mode disabled so the bot sees every
+  message, not just @mentions — see `TELEGRAM_GROUP_SETUP.md`.
+- Slack channels only see @mentions/DMs by default too (no equivalent of
+  Telegram's `_observe_unmentioned_group_message` on the host today) — for a
+  config-only workaround (with its fail-open caveat), see
+  `SLACK_GROUP_SETUP.md`.
