@@ -52,6 +52,7 @@ def on_transform_llm_output(response_text=None, session_id=None, **kwargs):
     # per-task contextvar, looked up in the map filled at decide). consume once.
     mid = _current_message_id()
     epoch = state.EPOCH_BY_MESSAGE_ID.pop(mid, None) if mid else None
+    meta = state.META_BY_MESSAGE_ID.pop(mid, None) if mid else None
     if not draft or epoch is None:
         return None  # not a turn-taking speak turn → leave Hermes alone
     chat = _chat_for_session(sid)
@@ -62,7 +63,7 @@ def on_transform_llm_output(response_text=None, session_id=None, **kwargs):
     # transform_llm_output runs in the agent's worker thread (no running loop here),
     # so hand _respond to the gateway loop captured on inbound. A bare create_task
     # raises "no running event loop" and the naturalize call is silently lost.
-    _coro = _respond(sid, draft, epoch, _build_system_prompt_for_turn_taking(None, sid))
+    _coro = _respond(sid, draft, epoch, _build_system_prompt_for_turn_taking(None, sid), meta)
     try:
         if state.LOOP is not None:
             asyncio.run_coroutine_threadsafe(_coro, state.LOOP)  # bubbles delivered via WS

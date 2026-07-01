@@ -113,11 +113,19 @@ async def respond(
     content: str,
     turn_epoch: int,
     system_prompt: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Naturalize a draft (epoch required, fail-closed). Returns {scheduled, superseded}."""
+    """Naturalize a draft (epoch required, fail-closed). Returns {scheduled, superseded}.
+
+    ``metadata`` is an opaque per-turn bag the service echoes verbatim on every
+    delivered bubble frame (svc contract ``RespondRequest.metadata``, cap 4 KB) —
+    used here to carry the forum-topic id to ``_forward``.
+    """
     body: Dict[str, Any] = {"thread_id": thread_id, "content": content, "turn_epoch": turn_epoch}
     if system_prompt:
         body["system_prompt"] = system_prompt[:_SYSTEM_PROMPT_CAP]
+    if metadata:
+        body["metadata"] = metadata
     return await _post(RESPOND_PATH, body)
 
 
@@ -137,12 +145,13 @@ def _connect_url(open_resp: Optional[Dict[str, Any]]) -> Optional[str]:
 
 async def _receive_loop(
     connect_url: str,
-    on_message: Callable[[Optional[str], Optional[str]], Awaitable[None]],
+    on_message: Callable[[Optional[str], Optional[str], Optional[Dict[str, Any]]], Awaitable[None]],
     on_typing: Optional[Callable[[Optional[str], Optional[bool]], Awaitable[None]]] = None,
 ) -> None:
     """Read envelopes until the socket closes; dispatch each by ``type``.
 
-    - ``turn_taking.message`` → ``await on_message(thread_id, content)`` (one bubble)
+    - ``turn_taking.message`` → ``await on_message(thread_id, content, metadata)`` (one bubble;
+      ``metadata`` is the verbatim echo of the respond's ``metadata``, or None)
     - ``turn_taking.typing``  → ``await on_typing(thread_id, typing)`` (if provided)
     - ``attached`` (handshake) → ignored
 
@@ -166,7 +175,7 @@ async def _receive_loop(
                 data = env.get("data") or {}
                 _log.info("tt ws: frame type=%s tid=%s", t, data.get("thread_id"))
                 if t == "turn_taking.message":
-                    await on_message(data.get("thread_id"), data.get("content"))
+                    await on_message(data.get("thread_id"), data.get("content"), data.get("metadata"))
                 elif t == "turn_taking.typing" and on_typing is not None:
                     await on_typing(data.get("thread_id"), data.get("typing"))
     except Exception as e:

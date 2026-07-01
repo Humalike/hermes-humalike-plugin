@@ -23,6 +23,8 @@ from .turn_taking.patching import (
     _patch_merge_pending_message_event,
     _patch__poll_messages,
     _patch_send,
+    _patch_telegram_handle_message,
+    _patch_telegram_observe_group,
 )
 from .turn_taking.service import _service_url
 
@@ -66,6 +68,8 @@ def register(ctx) -> None:
     sent = _patch_send()
     inbound = _patch__enqueue_text_event()
     poll = _patch__poll_messages()
+    tg_media = _patch_telegram_handle_message()
+    tg_group = _patch_telegram_observe_group()
     merge_fix = _patch_merge_pending_message_event()
     hooked = False
     try:
@@ -73,5 +77,5 @@ def register(ctx) -> None:
         hooked = True
     except Exception as e:
         _log.warning("turn-taking: could not register transform_llm_output hook: %s", e)
-    _log.info("turn-taking registered (send=%s, inbound=%s, poll=%s, merge_fix=%s, transform=%s)",
-              sent, inbound, poll, merge_fix, hooked)
+    _log.info("turn-taking registered (send=%s, inbound=%s, poll=%s, tg_media=%s, tg_group=%s, merge_fix=%s, transform=%s)",
+              sent, inbound, poll, tg_media, tg_group, merge_fix, hooked)

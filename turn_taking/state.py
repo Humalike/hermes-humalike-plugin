@@ -20,10 +20,20 @@ from typing import Any, Callable, Dict, Optional, Tuple
 # thread_id → (adapter, chat_id): where to deliver this thread's bubbles.
 ROUTES: Dict[str, Tuple[Any, str]] = {}
 
-# The genuine adapter.send, captured before patching, so _forward delivers
-# bubbles via the ORIGINAL — they bypass our patch entirely, which is what
-# suppresses the agent's monolithic draft. No metadata marker needed.
-ORIG_SEND: Optional[Callable] = None
+# The genuine adapter.send per adapter class, captured before patching, so
+# _forward delivers bubbles via the ORIGINAL — they bypass our patch entirely,
+# which is what suppresses the agent's monolithic draft. No metadata marker needed.
+# Keyed by adapter class so WhatsApp and Telegram can be patched at once without a
+# single global clobbering one platform's original with the other's.
+ORIG_SEND: Dict[type, Callable] = {}
+
+# The genuine adapter.handle_message per adapter class, captured before patching
+# handle_message to gate media. Only platforms whose handle_message is gated have
+# an entry; _handle_inbound dispatches a "speak" turn through this genuine handler
+# (so it doesn't recurse into the gate). No entry (e.g. WhatsApp, whose media goes
+# through the patched _poll loop, not a gated handle_message) → _handle_inbound
+# falls back to the adapter's own (unpatched) handle_message.
+ORIG_HANDLE: Dict[type, Callable] = {}
 
 # ── Session → thread map: one thread per conversation ─────────────────────────
 SESSIONS: Dict[str, str] = {}  # Hermes session_id → turn-taking thread_id
@@ -37,6 +47,14 @@ OPEN_LOCK = asyncio.Lock()     # serializes thread-opens (rare) so a burst can't
 # set by the gateway before the turn runs and propagated into the worker thread via
 # copy_context). That is ordering-independent and needs no interrupt to stay correct.
 EPOCH_BY_MESSAGE_ID: Dict[str, int] = {}  # message_id → turn_epoch of the "speak" decision
+
+# Per-turn opaque delivery hints, keyed by the same message_id as the epoch above
+# and with the same lifecycle (stashed at decide on "speak", popped by the transform
+# hook). Round-tripped through the service's respond.metadata → echoed verbatim on
+# every delivered bubble frame → read by delivery._forward. First use: the Telegram
+# forum-topic id ({"thread_id": ...}) so a bubble lands in the source topic, not
+# General. Empty/absent for non-topic chats and WhatsApp.
+META_BY_MESSAGE_ID: Dict[str, Dict[str, str]] = {}
 
 # Per-turn RAW message_id, carried into the turn's worker thread and read by the
 # transform hook. Bound as a side effect of GatewayRunner._reply_anchor_for_event
