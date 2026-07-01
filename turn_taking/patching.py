@@ -31,12 +31,12 @@ def _platform_adapter_classes() -> list:
     """
     classes = []
     try:
-        from gateway.platforms.whatsapp import WhatsAppAdapter
+        from plugins.platforms.whatsapp.adapter import WhatsAppAdapter
         classes.append(WhatsAppAdapter)
     except Exception as e:
         _log.warning("turn-taking: WhatsAppAdapter unavailable: %s", e)
     try:
-        from gateway.platforms.telegram import TelegramAdapter
+        from plugins.platforms.telegram.adapter import TelegramAdapter
         classes.append(TelegramAdapter)
     except Exception as e:
         _log.warning("turn-taking: TelegramAdapter unavailable: %s", e)
@@ -174,7 +174,7 @@ def _patch__poll_messages() -> bool:
     connect and start this task (run.py:4535).
     """
     try:
-        from gateway.platforms.whatsapp import WhatsAppAdapter
+        from plugins.platforms.whatsapp.adapter import WhatsAppAdapter
     except Exception as e:
         _log.warning("turn-taking: cannot patch poll loop (no WhatsAppAdapter): %s", e)
         return False
@@ -237,7 +237,7 @@ def _patch_telegram_handle_message() -> bool:
     back to it directly). Idempotent.
     """
     try:
-        from gateway.platforms.telegram import TelegramAdapter
+        from plugins.platforms.telegram.adapter import TelegramAdapter
     except Exception as e:
         _log.warning("turn-taking: cannot patch Telegram media gate (no TelegramAdapter): %s", e)
         return False
@@ -312,7 +312,7 @@ def _patch_telegram_observe_group() -> bool:
     bites in busy groups, gate thread-open on a cheaper pre-check.
     """
     try:
-        from gateway.platforms.telegram import TelegramAdapter
+        from plugins.platforms.telegram.adapter import TelegramAdapter
     except Exception as e:
         _log.warning("turn-taking: cannot patch Telegram group observe (no TelegramAdapter): %s", e)
         return False
