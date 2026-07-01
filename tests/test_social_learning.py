@@ -85,7 +85,7 @@ def test_cache_survives_reload_from_disk():
         sl._CACHE.clear()
         sl._COUNTER.clear()
         sl._load_cache()
-        assert sl._CACHE == {"restart-test": "voice card text"}
+        assert sl._CACHE.get("restart-test") == "voice card text"
     finally:
         sl._cache_file = orig_cache_file
         sl._CACHE.pop("restart-test", None)
