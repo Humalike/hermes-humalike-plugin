@@ -1,3 +1,8 @@
+---
+name: configure-slack-group
+description: Configure Hermes on Slack to see every message in a channel, not just @mentions/DMs — the authorization and mention gates, and the fail-open tradeoff. Use when a user wants the bot to respond in a Slack channel without being @mentioned, or asks why it isn't seeing unmentioned messages.
+---
+
 # Hermes on Slack in a channel — checklist
 
 How to make the bot (turn-taking) see EVERY message in a channel, not just

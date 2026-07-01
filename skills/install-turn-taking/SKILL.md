@@ -64,5 +64,5 @@ Restart the Hermes gateway so the plugin and its `/soul enhance` command registe
   message, not just @mentions — see `TELEGRAM_GROUP_SETUP.md`.
 - Slack channels only see @mentions/DMs by default too (no equivalent of
   Telegram's `_observe_unmentioned_group_message` on the host today) — for a
-  config-only workaround (with its fail-open caveat), see
-  `SLACK_GROUP_SETUP.md`.
+  config-only workaround (with its fail-open caveat), see the
+  `configure-slack-group` skill.
