@@ -21,8 +21,10 @@ Config (config.yaml)
       log_requests: false                     # optional debug dump
 Env: SOCIAL_LEARNING_API_KEY (sent as the X-API-Key header).
 
-ponytail: in-memory only (no restart persistence), no back-off, last-writer-wins
-— all acceptable for a style hint. Uses httpx (already a plugin dep), not requests.
+ponytail: no back-off, last-writer-wins — acceptable for a style hint. Uses
+httpx (already a plugin dep), not requests. Cache is persisted to a JSON file
+(_CACHE_FILE) so voice cards survive a Hermes restart; see _load_cache /
+_save_cache.
 """
 
 from __future__ import annotations
@@ -44,6 +46,41 @@ SERVICE_PATH: str = "/v1/social-learning/actions/extract"
 _LOCK: threading.Lock = threading.Lock()
 _CACHE: Dict[str, str] = {}   # session_id -> prompt_block (voice card)
 _COUNTER: Dict[str, int] = {}  # session_id -> turn count
+
+
+def _cache_file():
+    from hermes_constants import get_hermes_home  # noqa: PLC0415
+
+    return get_hermes_home() / "state" / "social-learning-cache.json"
+
+
+def _load_cache() -> None:
+    """Best-effort restore of _CACHE/_COUNTER from disk. Never raises."""
+    try:
+        path = _cache_file()
+        data = json.loads(path.read_text(encoding="utf-8"))
+        _CACHE.update(data.get("cache", {}))
+        _COUNTER.update(data.get("counter", {}))
+        logger.info("social-learning: restored %d cached voice card(s) from %s", len(_CACHE), path)
+    except FileNotFoundError:
+        pass
+    except Exception as exc:
+        logger.debug("social-learning: cache restore failed: %s", exc)
+
+
+def _save_cache() -> None:
+    """Persist _CACHE/_COUNTER to disk (atomic write). Caller holds _LOCK. Never raises."""
+    try:
+        path = _cache_file()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"cache": _CACHE, "counter": _COUNTER}), encoding="utf-8")
+        tmp.replace(path)
+    except Exception as exc:
+        logger.debug("social-learning: cache save failed: %s", exc)
+
+
+_load_cache()
 
 
 # ── Config helpers ────────────────────────────────────────────────────────────
@@ -185,6 +222,7 @@ def _refresh_card(session_id: str, conversation_history: Any) -> None:
             if isinstance(prompt_block, str) and prompt_block:
                 with _LOCK:
                     _CACHE[session_id] = prompt_block
+                    _save_cache()
                 logger.info(
                     "social-learning: refreshed voice card for session %s (%d chars from %d msgs)",
                     session_id, len(prompt_block), len(transcript),
