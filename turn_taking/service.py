@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, Optional
 
@@ -31,27 +30,23 @@ RESPOND_PATH = "/v1/turn-taking/actions/respond"
 # SOUL.md, the most useful signal for decide/naturalize.
 _SYSTEM_PROMPT_CAP = 100000
 
+# ~/.hermes/config.yaml — used by core.py to read SOUL.md + the agent system prompt.
 _HERMES_CONFIG = Path.home() / ".hermes" / "config.yaml"
 
 
 # ── Config + auth ─────────────────────────────────────────────────────────────
-def _service_url() -> str:
-    """Base URL. Env ``TURN_TAKING_SERVICE_URL`` wins; else config.yaml; "" if unset."""
-    url = os.getenv("TURN_TAKING_SERVICE_URL", "")
-    if not url:
-        try:
-            import yaml
+# Shared across all Humalike sub-plugins: one HUMALIKE_API_URL + HUMALIKE_API_KEY.
+from .. import _config  # noqa: E402
 
-            cfg = yaml.safe_load(_HERMES_CONFIG.read_text()) or {}
-            url = str((cfg.get("turn_taking") or {}).get("service_url", ""))
-        except Exception:
-            url = ""
-    return url.rstrip("/")
+
+def _service_url() -> str:
+    """Base URL (``HUMALIKE_API_URL``)."""
+    return _config.service_url()
 
 
 def _api_key() -> str:
-    """API key from ``TURN_TAKING_API_KEY`` (sent as ``Authorization: Bearer``)."""
-    return os.getenv("TURN_TAKING_API_KEY", "")
+    """API key, sent as ``Authorization: Bearer`` (``HUMALIKE_API_KEY``)."""
+    return _config.api_key()
 
 
 def _headers() -> Dict[str, str]:

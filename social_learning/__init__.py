@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 import threading
 from typing import Any, Dict, List, Optional
@@ -41,7 +40,6 @@ logger = logging.getLogger("hermes.plugins.turn_taking")
 REFRESH_EVERY: int = 5
 WINDOW: int = 100
 SERVICE_PATH: str = "/v1/social-learning/actions/extract"
-API_KEY_ENV: str = "SOCIAL_LEARNING_API_KEY"
 
 _LOCK: threading.Lock = threading.Lock()
 _CACHE: Dict[str, str] = {}   # session_id -> prompt_block (voice card)
@@ -49,15 +47,13 @@ _COUNTER: Dict[str, int] = {}  # session_id -> turn count
 
 
 # ── Config helpers ────────────────────────────────────────────────────────────
-def _get_service_url() -> str:
-    """Configured service base URL, or '' if unset / on error."""
-    try:
-        from hermes_cli.config import load_config, cfg_get  # noqa: PLC0415
+# Shared with turn-taking: one HUMALIKE_API_URL + HUMALIKE_API_KEY for every Humalike call.
+from .. import _config  # noqa: E402
 
-        url = cfg_get(load_config(), "social_learning", "service_url", default="") or ""
-        return url.rstrip("/")
-    except Exception:
-        return ""
+
+def _get_service_url() -> str:
+    """Base URL (``HUMALIKE_API_URL``)."""
+    return _config.service_url()
 
 
 def _log_requests_enabled() -> bool:
@@ -165,7 +161,7 @@ def _refresh_card(session_id: str, conversation_history: Any) -> None:
         base = _get_service_url()
         if not base:
             return
-        api_key = os.environ.get(API_KEY_ENV, "")
+        api_key = _config.api_key()
         url = base + SERVICE_PATH
         body = {"transcript": {"messages": transcript}}
         logger.info(
