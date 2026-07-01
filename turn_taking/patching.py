@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 from typing import Any, Callable
 
 from . import state
@@ -22,24 +23,53 @@ _reply_anchor_patched = False  # idempotency for _patch__reply_anchor_for_event
 _merge_patched = False  # idempotency for _patch_merge_pending_message_event
 
 
+def _real_adapter_class(platform: str, class_name: str):
+    """The adapter class the GATEWAY actually uses for *platform*.
+
+    Hermes loads bundled platform adapters (plugins/platforms/<platform>/adapter.py)
+    through its dynamic plugin loader under the synthetic module name
+    ``hermes_plugins.<platform>_platform.adapter`` (see hermes_cli/plugins.py's
+    ``_load_directory_module``), NOT via a plain ``import
+    plugins.platforms.<platform>.adapter``. The plain import still "succeeds" (the
+    file is on a real, walkable package path) but re-executes the module under a
+    SEPARATE sys.modules key, producing a second, distinct class object that the
+    live gateway never instantiates — patching it is a silent no-op.
+
+    Going through ``platform_registry.get(platform)`` forces its deferred loader
+    to resolve (importing the real module, if not already loaded) so we can then
+    pull the actual class out of ``sys.modules`` under the name the gateway uses.
+    Safe to call from plugin ``register()``: bundled platform manifests are
+    discovered before user plugins, so the deferred loader is already registered
+    by the time this runs.
+    """
+    from gateway.platform_registry import platform_registry
+
+    platform_registry.get(platform)  # force-resolve the deferred loader
+    module_name = f"hermes_plugins.{platform}_platform.adapter"
+    module = sys.modules.get(module_name)
+    cls = getattr(module, class_name, None) if module is not None else None
+    if cls is None:
+        raise ImportError(f"{class_name} not found in {module_name}")
+    return cls
+
+
 def _platform_adapter_classes() -> list:
     """The adapter classes turn-taking patches, those importable in this gateway.
 
-    Each platform is imported independently so a build without one (e.g. no
-    Telegram deps) just skips it. Both inherit ``BasePlatformAdapter`` and share
-    the ``send`` / ``_enqueue_text_event`` surface, so the same wrappers fit both.
+    Each platform is resolved independently so a build without one (e.g. no
+    Telegram deps) just skips it. All three inherit ``BasePlatformAdapter`` and
+    share the ``send`` surface, so the same wrapper fits every one.
     """
     classes = []
-    try:
-        from plugins.platforms.whatsapp.adapter import WhatsAppAdapter
-        classes.append(WhatsAppAdapter)
-    except Exception as e:
-        _log.warning("turn-taking: WhatsAppAdapter unavailable: %s", e)
-    try:
-        from plugins.platforms.telegram.adapter import TelegramAdapter
-        classes.append(TelegramAdapter)
-    except Exception as e:
-        _log.warning("turn-taking: TelegramAdapter unavailable: %s", e)
+    for platform, class_name in (
+        ("whatsapp", "WhatsAppAdapter"),
+        ("telegram", "TelegramAdapter"),
+        ("slack", "SlackAdapter"),
+    ):
+        try:
+            classes.append(_real_adapter_class(platform, class_name))
+        except Exception as e:
+            _log.warning("turn-taking: %s unavailable: %s", class_name, e)
     return classes
 
 
@@ -57,6 +87,14 @@ def _patch_send() -> bool:
     text), registered by the transform hook for the answer it naturalized; the send
     whose content matches is dropped, so a racing tool-notice can't be consumed by
     mistake. The draft still reaches Hermes history (persisted before send).
+
+    A suppressed send returns a synthetic success directly — it never calls the
+    real ``send``. WhatsApp/Telegram happen to no-op empty content themselves
+    (an early-return before any formatting/API call), but Slack's ``send`` has no
+    such guard: an empty ``chat.postMessage`` errors, which trips the host's
+    plain-text-fallback retry (``_send_with_retry``) and re-sends the very draft
+    we were suppressing. Not calling ``orig`` at all sidesteps that regardless of
+    whether a given platform happens to have an empty-content guard.
 
     Patches every importable adapter class, each wrapper closing over its OWN
     class's original via a factory so a Telegram bubble is never sent through
@@ -79,10 +117,12 @@ def _patch_send() -> bool:
                         state.PENDING_ANSWERS.pop(chat_id, None)
                     # This send IS the agent's final answer — naturalized by
                     # transform_llm_output and delivered as bubbles over WS, so drop
-                    # the raw copy. Empty content → original returns a no-send success.
+                    # the raw copy. Synthetic success — never touches the real send,
+                    # so no platform's API can reject it (see docstring).
                     _log.info("tt send: chat=%s → SUPPRESS (matched answer, bubbles via WS) | %r",
                               chat_id, key[:50])
-                    return await orig(self, chat_id, "", reply_to=reply_to, metadata=metadata)
+                    from gateway.platforms.base import SendResult
+                    return SendResult(success=True)
                 _log.info("tt send: chat=%s → passthrough | %r", chat_id, key[:50])
                 return await orig(self, chat_id, content, reply_to=reply_to, metadata=metadata)
             return _send
@@ -145,8 +185,9 @@ def _patch__enqueue_text_event() -> bool:
     class was patched."""
     patched_any = False
     for cls in _platform_adapter_classes():
-        if getattr(cls._enqueue_text_event, "_tt_patched", False):
-            continue
+        orig = getattr(cls, "_enqueue_text_event", None)
+        if orig is None or getattr(orig, "_tt_patched", False):
+            continue  # e.g. Slack, which has no _enqueue_text_event split (see _patch_slack_handle_message)
 
         def _enqueue_text_event(self, event):
             asyncio.create_task(_handle_inbound(self, event))
@@ -174,7 +215,7 @@ def _patch__poll_messages() -> bool:
     connect and start this task (run.py:4535).
     """
     try:
-        from plugins.platforms.whatsapp.adapter import WhatsAppAdapter
+        WhatsAppAdapter = _real_adapter_class("whatsapp", "WhatsAppAdapter")
     except Exception as e:
         _log.warning("turn-taking: cannot patch poll loop (no WhatsAppAdapter): %s", e)
         return False
@@ -237,7 +278,7 @@ def _patch_telegram_handle_message() -> bool:
     back to it directly). Idempotent.
     """
     try:
-        from plugins.platforms.telegram.adapter import TelegramAdapter
+        TelegramAdapter = _real_adapter_class("telegram", "TelegramAdapter")
     except Exception as e:
         _log.warning("turn-taking: cannot patch Telegram media gate (no TelegramAdapter): %s", e)
         return False
@@ -251,6 +292,36 @@ def _patch_telegram_handle_message() -> bool:
 
     handle_message._tt_patched = True  # type: ignore[attr-defined]
     TelegramAdapter.handle_message = handle_message
+    return True
+
+
+# ── Slack gate: route handle_message through the turn-taking gate ─────────────
+def _patch_slack_handle_message() -> bool:
+    """Gate Slack by routing ``SlackAdapter.handle_message`` through the same
+    gate as Telegram media.
+
+    Slack has no ``_enqueue_text_event`` split — every inbound event (text,
+    files, slash commands) funnels through the single inherited
+    ``handle_message`` (adapter.py's ``_handle_slack_message`` /
+    ``_handle_slack_file_shared`` / ``_handle_slash_command`` all call it), so
+    one patch covers everything, mirroring ``_patch_telegram_handle_message``.
+    Idempotent.
+    """
+    try:
+        SlackAdapter = _real_adapter_class("slack", "SlackAdapter")
+    except Exception as e:
+        _log.warning("turn-taking: cannot patch Slack gate (no SlackAdapter): %s", e)
+        return False
+    if getattr(SlackAdapter.handle_message, "_tt_patched", False):
+        return False
+    _orig = SlackAdapter.handle_message  # inherited from base; genuine handler
+    state.ORIG_HANDLE[SlackAdapter] = _orig
+
+    async def handle_message(self, event):
+        await _handle_inbound(self, event)
+
+    handle_message._tt_patched = True  # type: ignore[attr-defined]
+    SlackAdapter.handle_message = handle_message
     return True
 
 
@@ -312,7 +383,7 @@ def _patch_telegram_observe_group() -> bool:
     bites in busy groups, gate thread-open on a cheaper pre-check.
     """
     try:
-        from plugins.platforms.telegram.adapter import TelegramAdapter
+        TelegramAdapter = _real_adapter_class("telegram", "TelegramAdapter")
     except Exception as e:
         _log.warning("turn-taking: cannot patch Telegram group observe (no TelegramAdapter): %s", e)
         return False
