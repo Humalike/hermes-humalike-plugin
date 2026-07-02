@@ -1,7 +1,8 @@
 """Checks for the embedded social-learning voice-card module.
 
-social_learning.py imports httpx (not installed in this test env), so we stub it
-and load the module by file path. Run directly:  python3 tests/test_social_learning.py
+social_learning/ imports httpx (not installed in this test env) and its sibling
+_config.py via a relative import, so we stub httpx and load both under a fake
+parent package. Run directly:  python3 tests/test_social_learning.py
 """
 
 import importlib.util
@@ -14,8 +15,22 @@ _ROOT = Path(__file__).resolve().parent.parent
 
 def _load():
     sys.modules.setdefault("httpx", types.ModuleType("httpx"))
-    spec = importlib.util.spec_from_file_location("sl", _ROOT / "social_learning.py")
+
+    pkg = types.ModuleType("_humalike_test_pkg")
+    pkg.__path__ = [str(_ROOT)]
+    sys.modules["_humalike_test_pkg"] = pkg
+
+    cfg_spec = importlib.util.spec_from_file_location("_humalike_test_pkg._config", _ROOT / "_config.py")
+    cfg = importlib.util.module_from_spec(cfg_spec)
+    sys.modules["_humalike_test_pkg._config"] = cfg
+    cfg_spec.loader.exec_module(cfg)
+
+    spec = importlib.util.spec_from_file_location(
+        "_humalike_test_pkg.social_learning", _ROOT / "social_learning" / "__init__.py"
+    )
     mod = importlib.util.module_from_spec(spec)
+    mod.__package__ = "_humalike_test_pkg.social_learning"
+    sys.modules["_humalike_test_pkg.social_learning"] = mod
     spec.loader.exec_module(mod)
     return mod
 
@@ -51,6 +66,29 @@ def test_inject_returns_context_with_card():
 
 def test_no_session_id_is_noop():
     assert sl.on_pre_llm_call(session_id="") is None
+
+
+def test_cache_survives_reload_from_disk():
+    """_save_cache() writes; a fresh _load_cache() on an empty _CACHE restores it —
+    the actual restart-persistence behavior this test is for."""
+    import tempfile
+    from pathlib import Path
+
+    tmp = Path(tempfile.mkdtemp())
+    orig_cache_file = sl._cache_file
+    sl._cache_file = lambda: tmp / "social-learning-cache.json"
+    try:
+        sl._CACHE["restart-test"] = "voice card text"
+        sl._save_cache()
+        assert (tmp / "social-learning-cache.json").exists()
+
+        sl._CACHE.clear()
+        sl._COUNTER.clear()
+        sl._load_cache()
+        assert sl._CACHE.get("restart-test") == "voice card text"
+    finally:
+        sl._cache_file = orig_cache_file
+        sl._CACHE.pop("restart-test", None)
 
 
 if __name__ == "__main__":
