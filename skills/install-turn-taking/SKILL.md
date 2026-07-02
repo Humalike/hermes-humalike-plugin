@@ -63,7 +63,7 @@ environment — turn-taking stays disabled (`/soul` still works).
 
 ## Platform notes
 
-- **WhatsApp** — nothing extra.
+- **WhatsApp groups** — respond to everyone: `configure-whatsapp-group` skill.
 - **Telegram groups** — privacy mode + chat authorization: `configure-telegram-group` skill.
 - **Slack unmentioned channel messages** (fail-open caveat): `configure-slack-group` skill.
 - `/soul enhance` (and first-startup auto-enhance) needs a real persona seed in

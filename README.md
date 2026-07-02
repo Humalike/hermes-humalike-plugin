@@ -70,7 +70,7 @@ when it has something to say. Done.
 
 | Platform | Extra setup |
 |---|---|
-| WhatsApp | none |
+| WhatsApp | DMs work as-is. Groups: [`skills/configure-whatsapp-group`](skills/configure-whatsapp-group/SKILL.md) |
 | Telegram | DMs work as-is. Groups: [`skills/configure-telegram-group`](skills/configure-telegram-group/SKILL.md) |
 | Slack | DMs/@mentions work as-is. Unmentioned channel messages: [`skills/configure-slack-group`](skills/configure-slack-group/SKILL.md) |
 
