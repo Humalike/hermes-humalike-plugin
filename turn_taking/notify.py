@@ -28,7 +28,7 @@ _COOLDOWN_S = 30 * 60
 _LOCK = threading.Lock()             # alert() is now called from >1 thread
 _last_by_kind: dict[str, float] = {}  # error kind → monotonic ts of last alert
 _active_kinds: set[str] = set()       # kinds currently in the "failing" state
-_pending: list[str] = []              # startup misconfig msgs, flushed on 1st inbound
+_pending: list = []                   # (text, on_delivered) startup msgs, flushed on 1st inbound
 
 WS_LOST = ("⚠️ Humalike realtime connection lost — the bot may go SILENT in "
            "affected chats until the gateway restarts.")
@@ -124,10 +124,12 @@ def recovered() -> None:
         pass
 
 
-def queue_startup(text: str) -> None:
+def queue_startup(text: str, on_delivered=None) -> None:
     """Queue a startup misconfig alert; delivered on the first inbound message
-    (adapters aren't connected yet at register() time)."""
-    _pending.append(text)
+    (adapters aren't connected yet at register() time). ``on_delivered`` fires
+    only after the text actually reached at least one home channel — callers
+    use it to record "warned" without losing warnings that never got through."""
+    _pending.append((text, on_delivered))
 
 
 def flush_pending() -> None:
@@ -137,8 +139,16 @@ def flush_pending() -> None:
         return
     with _LOCK:
         msgs, _pending[:] = list(_pending), []
-    for m in msgs:
-        _schedule(lambda m=m: _send(m))
+    for m, cb in msgs:
+        _schedule(lambda m=m, cb=cb: _deliver_startup(m, cb))
+
+
+async def _deliver_startup(text: str, cb) -> None:
+    if await _send(text) and cb is not None:
+        try:
+            cb()
+        except Exception:
+            _log.warning("notify: on_delivered callback failed", exc_info=True)
 
 
 # ── Delivery ──────────────────────────────────────────────────────────────────
@@ -155,10 +165,10 @@ def _gateway() -> Any:
     return None
 
 
-async def _send(text: str) -> None:
+async def _send(text: str) -> bool:
     gw = _gateway()
     if gw is None:
-        return  # no adapter/gateway seen yet — nothing to send through (caller logged)
+        return False  # no adapter/gateway seen yet — nothing to send through (caller logged)
     # Every configured home channel — one platform failing must not skip the rest.
     sent_any = False
     for platform, adp in list(getattr(gw, "adapters", {}).items()):
@@ -178,3 +188,4 @@ async def _send(text: str) -> None:
             _log.warning("notify: alert to %s home failed: %s", platform, e)
     if not sent_any:
         _log.info("notify: no home channel set — run /sethome to get alerts in chat")
+    return sent_any
