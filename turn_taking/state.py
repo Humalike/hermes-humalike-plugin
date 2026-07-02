@@ -40,6 +40,11 @@ ORIG_HANDLE: Dict[type, Callable] = {}
 # ever opened, but an alert still needs a live adapter to reach the gateway).
 LAST_ADAPTER: Any = None
 
+# The most recent inbound chat_id, set next to LAST_ADAPTER. Together they name
+# "the chat that just messaged us" — connect.py captures the pair at /connect
+# time to route the approval confirmation back to the invoking chat.
+LAST_CHAT_ID: str = ""
+
 # ── Session → thread map: one thread per conversation ─────────────────────────
 SESSIONS: Dict[str, str] = {}  # Hermes session_id → turn-taking thread_id
 OPEN_LOCK = asyncio.Lock()     # serializes thread-opens (rare) so a burst can't double-open

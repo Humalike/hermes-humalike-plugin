@@ -46,8 +46,14 @@ hermes plugins enable turn-taking
 
 ```bash
 HUMALIKE_API_URL=https://api.humalike.com
-HUMALIKE_API_KEY=your-api-key
+HUMALIKE_API_KEY=your-api-key   # or skip and use /connect (below)
 ```
+
+No key yet? Leave `HUMALIKE_API_KEY` unset, start the gateway, and send the
+bot `/connect` from any chat. It replies with a login link; approve it in a
+browser on any device (your phone works — nothing needs to open on the gateway
+box, so SSH/VM/Docker installs are fine) and the key is saved to
+`~/.hermes/.env` and goes live without a restart.
 
 `~/.hermes/config.yaml` — all required:
 

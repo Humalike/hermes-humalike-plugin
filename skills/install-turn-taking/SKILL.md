@@ -9,8 +9,10 @@ Humalike plugin for [Hermes Agent](https://github.com/NousResearch/hermes-agent)
 turn-taking, persona (`/soul enhance`), theory of mind, social learning.
 API docs: <https://docs.humalike.com>.
 
-Do the steps in order. Ask the user only for the value marked **ask** (the API
-key); the URL defaults to `https://api.humalike.com`.
+Do the steps in order. The URL defaults to `https://api.humalike.com`. For the
+API key, ask whether the user already has one: if yes, set it in step 2; if
+not, skip it there — after the restart in step 4 they link their account by
+sending the bot `/connect` (a login link, approved in any browser).
 
 ## 1. Clone and enable
 
@@ -29,7 +31,7 @@ Humalike calls, sent as `Authorization: Bearer`:
 
 ```bash
 HUMALIKE_API_URL=https://api.humalike.com
-HUMALIKE_API_KEY=your-api-key                 # ask
+HUMALIKE_API_KEY=your-api-key   # ask — omit if the user will link via /connect
 ```
 
 ## 3. Required config
@@ -60,6 +62,11 @@ Restart the Hermes gateway, then send the bot a message. A `tt inbound: chat=…
 line in `~/.hermes/logs/gateway.log` confirms turn-taking is intercepting
 messages. If none appears, `HUMALIKE_API_URL` isn't set in the gateway's
 environment — turn-taking stays disabled (`/soul` still works).
+
+No API key set in step 2? Have the user send the bot `/connect` (from a DM,
+not a group): it replies with a login link they approve in a browser on any
+device — the key is then saved to `~/.hermes/.env` and goes live without
+another restart.
 
 ## Platform notes
 

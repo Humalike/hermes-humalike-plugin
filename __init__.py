@@ -18,7 +18,7 @@ import logging
 import os
 from pathlib import Path
 
-from . import _config, social_learning, soul
+from . import _config, connect, social_learning, soul
 from .turn_taking.hooks import on_transform_llm_output
 from .turn_taking.patching import (
     _patch__enqueue_text_event,
@@ -130,7 +130,8 @@ def _warn_misconfig() -> None:
                         "(/soul still works). Add it to ~/.hermes/.env.")
     elif not _config.api_key():
         problems.append("HUMALIKE_API_KEY is not set — every Humalike call will "
-                        "fail with 401. Add it to ~/.hermes/.env.")
+                        "fail with 401. Send the bot /connect to link your "
+                        "Humalike account, or add the key to ~/.hermes/.env.")
     try:
         import yaml
 
@@ -173,6 +174,14 @@ def register(ctx) -> None:
         _log.info("turn-taking: registered /soul command")
     except Exception as e:
         _log.warning("turn-taking: could not register /soul command: %s", e)
+    try:
+        ctx.register_command(
+            "connect", connect.command,
+            description="Link this agent to your Humalike account (device login)",
+        )
+        _log.info("turn-taking: registered /connect command")
+    except Exception as e:
+        _log.warning("turn-taking: could not register /connect command: %s", e)
     try:
         soul.maybe_auto_enhance()  # one-shot on first startup (marker-guarded)
     except Exception as e:
