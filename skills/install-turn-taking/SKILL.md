@@ -28,7 +28,7 @@ In `~/.hermes/.env` (create if missing) — one URL + one key covers all
 Humalike calls, sent as `Authorization: Bearer`:
 
 ```bash
-HUMALIKE_API_URL=https://api.humalike.com     # default; change only if self-hosted
+HUMALIKE_API_URL=https://api.humalike.com
 HUMALIKE_API_KEY=your-api-key                 # ask
 ```
 
