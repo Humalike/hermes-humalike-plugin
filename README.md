@@ -74,6 +74,10 @@ when it has something to say. Done.
 | Telegram | DMs work as-is. Groups: [`skills/configure-telegram-group`](skills/configure-telegram-group/SKILL.md) |
 | Slack | DMs/@mentions work as-is. Unmentioned channel messages: [`skills/configure-slack-group`](skills/configure-slack-group/SKILL.md) |
 
+## X/Twitter context companion
+
+Humalike decides when and how a bot should participate in chat. If a group conversation also needs X/Twitter research, account reading, or explicitly enabled posting, pair this plugin with [Hermes Tweet](https://github.com/Xquik-dev/hermes-tweet). Keep Humalike responsible for turn-taking, persona, and social learning, then use Hermes Tweet for the X/Twitter context.
+
 ## Persona: `/soul enhance`
 
 Send the bot `/soul enhance` to deepen its persona: reads `SOUL.md`, enhances
