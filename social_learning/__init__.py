@@ -238,6 +238,33 @@ def _refresh_card(session_id: str, conversation_history: Any) -> None:
         notify.alert_social(exc)
 
 
+# ── Detached refresh (shared by warm-up and the per-turn hook) ───────────────
+_REFRESHING: set = set()  # session ids with a refresh thread in flight
+
+
+def _spawn_refresh(session_id: str, history: Any) -> bool:
+    """Start a detached ``_refresh_card`` unless one is already in flight for
+    this session — at most one concurrent POST per session, so a slow or dead
+    service costs one 60s thread per session, not one per message (the no-card
+    branch fires every turn). Returns True if a thread was spawned.
+    ponytail: in-flight guard only; add time-based backoff if per-turn retries
+    against a dead service ever matter."""
+    with _LOCK:
+        if session_id in _REFRESHING:
+            return False
+        _REFRESHING.add(session_id)
+
+    def _run() -> None:
+        try:
+            _refresh_card(session_id, history)
+        finally:
+            with _LOCK:
+                _REFRESHING.discard(session_id)
+
+    threading.Thread(target=_run, daemon=True).start()
+    return True
+
+
 # ── Startup warm-up ──────────────────────────────────────────────────────────
 WARM_SESSIONS: int = 5
 
@@ -268,9 +295,7 @@ def warm_recent_sessions(limit: int = WARM_SESSIONS) -> None:
             if not session_id or already_cached:
                 continue
             history = db.get_messages_as_conversation(session_id)
-            threading.Thread(
-                target=_refresh_card, args=(session_id, history), daemon=True
-            ).start()
+            _spawn_refresh(session_id, history)
         logger.info("social-learning: warm-up fired for up to %d recent session(s)", len(sessions))
     except Exception as exc:
         logger.debug("social-learning: warm_recent_sessions failed: %s", exc)
@@ -296,15 +321,11 @@ def on_pre_llm_call(**kwargs: Any) -> Optional[Dict[str, Any]]:
         )
 
         if (not has_card or n % REFRESH_EVERY == 0) and _get_service_url():
-            logger.info(
-                "social-learning: turn %d session %s — firing detached refresh (%s)",
-                n, session_id, "no card yet" if not has_card else "scheduled",
-            )
-            threading.Thread(
-                target=_refresh_card,
-                args=(session_id, list(conversation_history)),
-                daemon=True,
-            ).start()
+            if _spawn_refresh(session_id, list(conversation_history)):
+                logger.info(
+                    "social-learning: turn %d session %s — firing detached refresh (%s)",
+                    n, session_id, "no card yet" if not has_card else "scheduled",
+                )
 
         with _LOCK:
             card = _CACHE.get(session_id)

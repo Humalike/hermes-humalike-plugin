@@ -119,7 +119,7 @@ def test_warm_recent_sessions_skips_already_cached():
     sys.modules["hermes_state"] = fake_hs
 
     class SyncThread:
-        def __init__(self, target, args, daemon):
+        def __init__(self, target=None, args=(), daemon=None):
             self._target, self._args = target, args
 
         def start(self):
@@ -143,6 +143,36 @@ def test_warm_recent_sessions_skips_already_cached():
         sys.modules.pop("hermes_state", None)
 
     assert calls == ["warm-1"], calls
+
+
+def test_spawn_refresh_dedups_in_flight():
+    """While a refresh runs for a session, further spawns for it are skipped."""
+    import threading
+
+    calls = []
+    orig_refresh, orig_thread = sl._refresh_card, threading.Thread
+    sl._refresh_card = lambda session_id, history: calls.append(session_id)
+
+    class SyncThread:
+        def __init__(self, target=None, args=(), daemon=None):
+            self._target, self._args = target, args
+
+        def start(self):
+            self._target(*self._args)
+
+    threading.Thread = SyncThread
+    try:
+        sl._REFRESHING.add("dup-1")                      # simulate one in flight
+        assert sl._spawn_refresh("dup-1", []) is False
+        assert calls == []
+        sl._REFRESHING.discard("dup-1")
+        assert sl._spawn_refresh("dup-1", []) is True
+        assert calls == ["dup-1"]
+        assert "dup-1" not in sl._REFRESHING             # cleaned up after the run
+    finally:
+        threading.Thread = orig_thread
+        sl._refresh_card = orig_refresh
+        sl._REFRESHING.discard("dup-1")
 
 
 if __name__ == "__main__":
