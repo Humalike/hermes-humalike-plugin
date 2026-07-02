@@ -61,8 +61,8 @@ turn_taking:
   soul_auto_enhance: true         # one-shot persona enhance on first startup
 ```
 
-Restart the gateway, then send the bot a message: a `tt inbound: chat=…` line
-in `~/.hermes/logs/gateway.log` confirms turn-taking is live. Done.
+Restart the gateway and message the bot — it now reads the room and replies
+when it has something to say. Done.
 
 ## Platforms
 
