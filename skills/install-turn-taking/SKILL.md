@@ -1,74 +1,68 @@
 ---
 name: install-turn-taking
-description: Install and configure the Humalike turn-taking Hermes plugin — clone it into a Hermes agent, set the two env vars (HUMALIKE_API_URL, HUMALIKE_API_KEY) and the two required config keys (streaming off, group sessions off). Use when a user wants to add turn-taking / persona (/soul enhance) / Humalike behavior to a Hermes Agent.
+description: Install and configure the Humalike turn-taking Hermes plugin — clone it into a Hermes agent, set the two env vars (HUMALIKE_API_URL, HUMALIKE_API_KEY) and the required config (streaming off, group sessions off, the turn_taking soul settings with a discovered soul_path). Use when a user wants to add turn-taking / persona (/soul enhance) / Humalike behavior to a Hermes Agent.
 ---
 
 # Install the turn-taking plugin
 
-Installs the Humalike plugin for a [Hermes Agent](https://github.com/NousResearch/hermes-agent):
-turn-taking (when to speak vs stay silent + a naturalized reply), persona via
-`/soul enhance`, theory of mind, and social learning. Full API docs:
-<https://docs.humalike.com>.
+Humalike plugin for [Hermes Agent](https://github.com/NousResearch/hermes-agent):
+turn-taking, persona (`/soul enhance`), theory of mind, social learning.
+API docs: <https://docs.humalike.com>.
 
-Do the steps in order. Stop and ask the user only for the two values marked
-**ask**: the Humalike API URL and the API key.
+Do the steps in order. Ask the user only for the two values marked **ask**.
 
 ## 1. Clone and enable
 
 ```bash
 git clone https://github.com/Humalike/hermes-humalike-plugin ~/.hermes/plugins/turn-taking
+
+# `hermes` must be the Hermes CLI from its install — activate the Hermes
+# virtualenv first (or call the hermes CLI by its full path)
 hermes plugins enable turn-taking
 ```
 
-## 2. Set the env vars
+## 2. Env vars
 
-Add to `~/.hermes/.env` (create it if missing). One URL + one key covers every
-Humalike call (turn-taking, persona, theory of mind, social learning), sent as
-`Authorization: Bearer`:
+In `~/.hermes/.env` (create if missing) — one URL + one key covers all
+Humalike calls, sent as `Authorization: Bearer`:
 
 ```bash
 HUMALIKE_API_URL=https://your-humalike-host   # ask (e.g. https://api.humalike.com)
 HUMALIKE_API_KEY=your-api-key                 # ask
 ```
 
-## 3. Set the required config
+## 3. Required config
 
-Merge into `~/.hermes/config.yaml` (create if missing). Both are **required** —
-the plugin replaces the final reply text and needs to own it:
+First find where SOUL.md actually lives: check `~/.hermes/SOUL.md`; if it's not
+there, search the Hermes install for an existing one (e.g. a `docker/SOUL.md`
+or a path mounted into the gateway). If none exists anywhere, use
+`~/.hermes/SOUL.md` — the plugin creates it on first startup.
+
+Then merge into `~/.hermes/config.yaml` (create if missing) — all **required**
+(the plugin replaces the final reply text and needs to own it):
 
 ```yaml
 streaming: false
 group_sessions_per_user: false
+
+turn_taking:
+  soul_path: "<the SOUL.md path found above>"
+  soul_grounding: "off"    # off | web | research — real-world research on enhance
+  soul_auto_enhance: true  # one-shot persona enhance on first startup
 ```
 
 ## 4. Restart and verify
 
-Restart the Hermes gateway, then check its logs for `turn-taking registered`
-(and `registered /soul command`). If the logs say `turn-taking idle` instead,
-`HUMALIKE_API_URL` isn't set in the gateway's environment.
-
-## Optional settings
-
-All optional, under `turn_taking:` in `~/.hermes/config.yaml` — only add what
-the user asks for:
-
-```yaml
-turn_taking:
-  system_prompt: "You are ..."                  # agent identity
-  soul_path: "~/.hermes/SOUL.md"                # where the persona lives
-  soul_grounding: "off"                         # off | web | research
-  soul_auto_enhance: true                       # one-shot enhance on first startup
-  personas_api_url: "https://api.humalike.com"  # persona API override
-```
+Restart the Hermes gateway, then send the bot a message. A `tt inbound: chat=…`
+line in `~/.hermes/logs/gateway.log` confirms turn-taking is intercepting
+messages. If none appears, `HUMALIKE_API_URL` isn't set in the gateway's
+environment — turn-taking stays disabled (`/soul` still works).
 
 ## Platform notes
 
 - **WhatsApp** — nothing extra.
-- **Telegram** — DMs work as-is. For group chats (privacy mode, chat
-  authorization), use the `configure-telegram-group` skill.
-- **Slack** — DMs/@mentions work as-is. To respond to unmentioned channel
-  messages (with its fail-open caveat), use the `configure-slack-group` skill.
-- A real persona seed in `SOUL.md` is needed before `/soul enhance` (or the
-  first-startup auto-enhance) does anything — a bare template is skipped.
-  Disable the one-time auto-enhance with `soul_auto_enhance: false` or env
-  `HERMES_SOUL_AUTO_ENHANCE=false`.
+- **Telegram groups** — privacy mode + chat authorization: `configure-telegram-group` skill.
+- **Slack unmentioned channel messages** (fail-open caveat): `configure-slack-group` skill.
+- `/soul enhance` (and first-startup auto-enhance) needs a real persona seed in
+  `SOUL.md` — a bare template is skipped. Disable auto-enhance with
+  `soul_auto_enhance: false` or `HERMES_SOUL_AUTO_ENHANCE=false`.

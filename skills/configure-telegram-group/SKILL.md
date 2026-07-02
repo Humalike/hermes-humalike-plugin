@@ -3,77 +3,51 @@ name: configure-telegram-group
 description: Configure Hermes on Telegram so the bot sees and answers every message in a group — BotFather privacy mode, chat/user authorization, and the "bot doesn't respond in the group" diagnosis. Use when a user wants the turn-taking bot working in a Telegram group, or asks why it isn't replying there.
 ---
 
-# Hermes on Telegram in a group — checklist
+# Hermes on Telegram in a group
 
-Everything needed for the (turn-taking) bot to work and reply to people in a
-group. Env settings go in `~/.hermes/.env`; **restart the gateway** after
-changes.
+Env settings go in `~/.hermes/.env`; **restart the gateway** after changes.
 
 ## 1. Bot token
 
-1. In Telegram, message **@BotFather** → `/newbot` (or `/token` for an
-   existing bot).
-2. Copy the token into `~/.hermes/.env`:
-   ```
-   TELEGRAM_BOT_TOKEN=<token>
-   ```
+@BotFather → `/newbot` (or `/token` for an existing bot), then:
+```
+TELEGRAM_BOT_TOKEN=<token>
+```
 
-## 2. Disable privacy mode (so the bot sees ALL group messages)
+## 2. Disable privacy mode
 
-By default a bot in a group only receives messages that @mention it.
-Turn-taking must see everything to decide when to speak.
-
-1. @BotFather → `/setprivacy` → pick the bot → **Disable**.
-2. **Remove the bot from the group and re-add it** — the privacy change only
-   takes effect on a fresh membership.
+By default a bot only receives @mentions in groups; turn-taking must see
+everything. @BotFather → `/setprivacy` → pick the bot → **Disable**, then
+**remove the bot from the group and re-add it** (the change only applies to a
+fresh membership).
 
 ## 3. Authorization — who gets replies
 
-This is a SEPARATE layer from turn-taking. Turn-taking decides *whether* to
-speak, but Hermes still rejects unauthorized senders (`Unauthorized user` in
-the logs) — the bot "sees" the message but never replies.
+Separate layer from turn-taking: unauthorized senders are rejected
+(`Unauthorized user` in the logs) even though the bot sees the message.
 
-- **DM:** each user must be paired. When someone messages the bot they get a
-  code; approve it:
+- **DM** (e.g. testing the bot 1:1 first): the user messages the bot, gets a
+  code, approve it with `hermes pairing approve telegram <CODE>`.
+- **Group:** authorize the whole chat instead of pairing every member:
   ```
-  hermes pairing approve telegram <CODE>
+  TELEGRAM_GROUP_ALLOWED_CHATS=<chat_id1>,<chat_id2>   # * = all groups
   ```
-  (list: `hermes pairing list`, revoke: `hermes pairing revoke`).
+  Find the chat_id in the logs: `tt inbound: chat=<chat_id>` (groups are
+  negative). ⚠️ **Each group has its own chat_id** — a forum (topics) group is
+  a different chat than a plain one, and converting changes the ID. Append each
+  new group and restart; symptom of a missing entry: `Unauthorized user` even
+  though "the other group works".
 
-- **Group (without pairing every member):** authorize the **whole chat by
-  ID** — then every group member works automatically:
-  ```
-  TELEGRAM_GROUP_ALLOWED_CHATS=<chat_id1>,<chat_id2>   # comma-separated; * = all groups
-  ```
-  Find the group's chat_id in the gateway logs: `tt inbound: chat=<chat_id>`
-  (Telegram groups have negative IDs).
+## 4. Restart and verify
 
-  ⚠️ **Every group has its OWN chat_id** — a group with topics (forum) is a
-  different chat than a plain group, and converting a group to a forum changes
-  its ID. Adding one doesn't authorize the other; each new group must be
-  appended to the list (comma-separated) and the gateway restarted. Symptom of
-  a missing entry: `Unauthorized user` even though "the other group works".
+Restart the Hermes gateway (however you run it). Look for `✓ telegram connected`
+and `tt inbound / tt decide / tt forward`.
 
-  Alternatives: `TELEGRAM_GROUP_ALLOWED_USERS=<id1>,<id2>` (only the listed
-  people), or pairing each person individually.
+## Diagnosis: "the bot doesn't reply in the group"
 
-## 4. Restart the gateway
-
-```
-cd ~/repos/hermes-agent
-.venv/bin/hermes gateway run -v
-```
-
-Check the logs for `✓ telegram connected` and `tt inbound / tt decide /
-tt forward`.
-
-## Quick diagnosis: "the bot doesn't reply in the group"
-
-1. **No `tt inbound` for the message** → privacy mode is still on (step 2) or
-   the bot isn't in the group.
-2. **`tt decide ... stay_silent` shows up** → turn-taking is deliberately
-   staying quiet (correct — it speaks selectively).
-3. **`Unauthorized user: <id>` in the logs** → the sender isn't authorized
-   (step 3).
-4. **`tt respond ... DROPPED (superseded)`** → a rapid burst of messages; only
-   the reply to the newest one is delivered.
+| Log symptom | Cause |
+|---|---|
+| No `tt inbound` for the message | Privacy mode still on (step 2), or bot not in the group |
+| `Unauthorized user: <id>` | Sender/chat not authorized (step 3) |
+| `tt decide ... stay_silent` | Expected — turn-taking speaks selectively |
+| `tt respond ... DROPPED (superseded)` | Message burst; only the newest gets a reply |
