@@ -45,6 +45,8 @@ Then merge into `~/.hermes/config.yaml` (create if missing) — all **required**
 ```yaml
 streaming: false
 group_sessions_per_user: false
+display:
+  tool_progress: "off"   # hide tool-call chatter (Browsing/Clicking/…) so replies read as human
 
 turn_taking:
   soul_path: "<the SOUL.md path found above>"

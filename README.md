@@ -54,6 +54,8 @@ HUMALIKE_API_KEY=your-api-key
 ```yaml
 streaming: false                # the plugin replaces the final reply text
 group_sessions_per_user: false  # one thread per group chat
+display:
+  tool_progress: "off"          # hide tool-call chatter (Browsing/Clicking/…) so replies read as human
 
 turn_taking:
   soul_path: "~/.hermes/SOUL.md"  # where your SOUL.md actually lives — adjust if elsewhere (e.g. a Docker mount)
