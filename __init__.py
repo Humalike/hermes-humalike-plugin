@@ -15,8 +15,9 @@ This module only registers the plugin's command, hooks, and patches.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
-from . import social_learning, soul
+from . import _config, social_learning, soul
 from .turn_taking.hooks import on_transform_llm_output
 from .turn_taking.patching import (
     _patch__enqueue_text_event,
@@ -32,14 +33,55 @@ from .turn_taking.service import _service_url
 _log = logging.getLogger("hermes.plugins.turn_taking")
 
 
+def _warn_misconfig() -> None:
+    """Fail loudly at startup on every misconfig that otherwise breaks silently.
+
+    Each case below produces broken behavior with no error anywhere near the
+    cause (silent idle, 401s, per-user group sessions, streamed replies the
+    plugin can't replace) — so name the fix in the log line itself.
+    """
+    if not _config.service_url():
+        _log.warning(
+            "turn-taking: HUMALIKE_API_URL is not set — turn-taking is DISABLED "
+            "(/soul still works). Add it to ~/.hermes/.env and restart the gateway."
+        )
+    elif not _config.api_key():
+        _log.warning(
+            "turn-taking: HUMALIKE_API_KEY is not set — every Humalike call will "
+            "fail with 401. Add it to ~/.hermes/.env and restart the gateway."
+        )
+    try:
+        import yaml
+
+        cfg = yaml.safe_load((Path.home() / ".hermes" / "config.yaml").read_text()) or {}
+    except FileNotFoundError:
+        cfg = {}
+    except Exception as e:
+        _log.warning("turn-taking: cannot read ~/.hermes/config.yaml (%s) — skipping config checks", e)
+        return
+    streaming = cfg.get("streaming")
+    if streaming is True or (isinstance(streaming, dict) and streaming.get("enabled")):
+        _log.warning(
+            "turn-taking: streaming is enabled — the plugin must own the final reply "
+            "text and will misbehave. Set 'streaming: false' in ~/.hermes/config.yaml."
+        )
+    if cfg.get("group_sessions_per_user", True):  # Hermes defaults this to true
+        _log.warning(
+            "turn-taking: group_sessions_per_user is not false — group chats get one "
+            "session per member instead of one shared thread, so the bot loses the "
+            "conversation flow. Set 'group_sessions_per_user: false' in ~/.hermes/config.yaml."
+        )
+
+
 def register(ctx) -> None:
     """Plugin entry point: activate the send + inbound patches.
 
     Idle (no patching) when turn-taking isn't configured, so the plugin is a
-    no-op unless ``TURN_TAKING_SERVICE_URL`` / config.yaml is set — but the
-    ``/soul`` persona command is registered regardless (it uses the separate
-    Personas API, not the turn-taking service).
+    no-op unless ``HUMALIKE_API_URL`` is set — but the ``/soul`` persona
+    command is registered regardless (it uses the separate Personas API, not
+    the turn-taking service).
     """
+    _warn_misconfig()
     try:
         ctx.register_command(
             "soul", soul.command,
@@ -55,8 +97,8 @@ def register(ctx) -> None:
         _log.warning("turn-taking: auto-enhance skipped: %s", e)
 
     # Embedded social-learning voice card: register regardless of the turn-taking
-    # service (it's gated on its own ``social_learning.service_url`` and no-ops
-    # until a card is cached). Fills the _CACHE that both the agent prompt (this
+    # patches (it no-ops while HUMALIKE_API_URL is unset and until a card is
+    # cached). Fills the _CACHE that both the agent prompt (this
     # hook) and turn-taking's _build_system_prompt_for_turn_taking() read.
     try:
         ctx.register_hook("pre_llm_call", social_learning.on_pre_llm_call)
@@ -64,8 +106,7 @@ def register(ctx) -> None:
     except Exception as e:
         _log.warning("turn-taking: could not register social-learning hook: %s", e)
     if not _service_url():
-        _log.info("turn-taking: no service_url configured — turn-taking idle (/soul still available)")
-        return
+        return  # already warned loudly in _warn_misconfig()
     sent = _patch_send()
     inbound = _patch__enqueue_text_event()
     poll = _patch__poll_messages()
