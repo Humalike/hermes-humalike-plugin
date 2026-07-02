@@ -45,35 +45,48 @@ Full API reference: <https://docs.humalike.com>.
 > can do the install and config below for you.
 
 ```bash
-git clone <repo-url> ~/.hermes/plugins/turn-taking
+git clone https://github.com/Humalike/hermes-humalike-plugin ~/.hermes/plugins/turn-taking
 hermes plugins enable turn-taking
 ```
 
-Configure in `~/.hermes/config.yaml`:
+Add to `~/.hermes/.env` (one URL + one key for all Humalike calls, sent as
+`Authorization: Bearer`):
+
+```bash
+HUMALIKE_API_URL=https://your-humalike-host   # e.g. https://api.humalike.com
+HUMALIKE_API_KEY=your-api-key
+```
+
+Add to `~/.hermes/config.yaml` (both required):
+
+```yaml
+streaming: false                # the plugin replaces the final reply text
+group_sessions_per_user: false  # one thread per group chat
+```
+
+Restart the gateway and check the logs for `turn-taking registered`. That's it —
+everything else is optional.
+
+## Platforms
+
+| Platform | Extra setup |
+|---|---|
+| WhatsApp | none |
+| Telegram | DMs work as-is. For groups: disable privacy mode + authorize the chat — [`skills/configure-telegram-group`](skills/configure-telegram-group/SKILL.md) |
+| Slack | DMs/@mentions work as-is. To respond to unmentioned channel messages — [`skills/configure-slack-group`](skills/configure-slack-group/SKILL.md) |
+
+## Optional settings
+
+All optional, under `turn_taking:` in `~/.hermes/config.yaml`:
 
 ```yaml
 turn_taking:
-  service_url: "https://your-service-host"  # POSTs to {url}/v1/turn-taking/actions/*
-  personas_api_url: "https://api.humalike.com"  # optional, this is the default
-  system_prompt: "You are ..."             # optional: agent identity
-  soul_path: "~/.hermes/SOUL.md"           # optional; where the persona lives
-  soul_grounding: "off"                     # off | web | research
-  soul_auto_enhance: true                   # optional; default true
-
-# Required for this plugin:
-streaming: false                            # reply replace must own the final text
-group_sessions_per_user: false              # one thread per group (group chats)
+  system_prompt: "You are ..."                  # agent identity
+  soul_path: "~/.hermes/SOUL.md"                # where the persona lives
+  soul_grounding: "off"                         # off | web | research
+  soul_auto_enhance: true                       # one-shot enhance on first startup
+  personas_api_url: "https://api.humalike.com"  # persona API override
 ```
-
-Set the API key (sent as `Authorization: Bearer`):
-
-```bash
-export TURN_TAKING_API_KEY="your-api-key"   # or add to ~/.hermes/.env
-```
-
-The Humalike APIs reuse `TURN_TAKING_API_KEY` unless you set `HUMALIKE_API_KEY`.
-
-Restart the gateway so the plugin loads.
 
 ## Persona: `/soul enhance`
 

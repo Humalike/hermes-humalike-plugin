@@ -14,12 +14,11 @@ transcript to ``{service_url}/v1/social-learning/extract``; the service returns 
 FAST CLOCK (inject): every call reads _CACHE and returns ``{"context": card}`` so
 Hermes injects the card into the agent prompt. No card yet → None (LLM unchanged).
 
-Config (config.yaml)
---------------------
-    social_learning:
-      service_url: "http://localhost:8003"   # required; '' disables refresh
-      log_requests: false                     # optional debug dump
-Env: SOCIAL_LEARNING_API_KEY (sent as the X-API-Key header).
+Config
+------
+Env: ``HUMALIKE_API_URL`` + ``HUMALIKE_API_KEY`` (shared with all sub-plugins;
+unset URL disables refresh). Optional ``social_learning.log_requests: true`` in
+config.yaml dumps request payloads to JSONL.
 
 ponytail: no back-off, last-writer-wins — acceptable for a style hint. Uses
 httpx (already a plugin dep), not requests. Cache is persisted to a JSON file
