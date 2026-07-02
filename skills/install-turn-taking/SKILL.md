@@ -9,7 +9,8 @@ Humalike plugin for [Hermes Agent](https://github.com/NousResearch/hermes-agent)
 turn-taking, persona (`/soul enhance`), theory of mind, social learning.
 API docs: <https://docs.humalike.com>.
 
-Do the steps in order. Ask the user only for the two values marked **ask**.
+Do the steps in order. Ask the user only for the value marked **ask** (the API
+key); the URL defaults to `https://api.humalike.com`.
 
 ## 1. Clone and enable
 
@@ -27,7 +28,7 @@ In `~/.hermes/.env` (create if missing) — one URL + one key covers all
 Humalike calls, sent as `Authorization: Bearer`:
 
 ```bash
-HUMALIKE_API_URL=https://your-humalike-host   # ask (e.g. https://api.humalike.com)
+HUMALIKE_API_URL=https://api.humalike.com     # default; change only if self-hosted
 HUMALIKE_API_KEY=your-api-key                 # ask
 ```
 

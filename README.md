@@ -45,7 +45,7 @@ hermes plugins enable turn-taking
 (`Authorization: Bearer`):
 
 ```bash
-HUMALIKE_API_URL=https://your-humalike-host   # e.g. https://api.humalike.com
+HUMALIKE_API_URL=https://api.humalike.com
 HUMALIKE_API_KEY=your-api-key
 ```
 
