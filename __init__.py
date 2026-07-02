@@ -15,6 +15,7 @@ This module only registers the plugin's command, hooks, and patches.
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 
 from . import _config, social_learning, soul
@@ -34,15 +35,94 @@ from .turn_taking.service import _service_url
 _log = logging.getLogger(__name__)
 
 
-def _warn_misconfig() -> None:
-    """Fail loudly at startup on every misconfig that otherwise breaks silently.
+_TRUE = {"true", "1", "yes", "on"}
+_FALSE = {"false", "0", "no", "off"}
 
-    Each case produces broken behavior with no error near the cause (silent
-    idle, 401s, per-user group sessions, streamed replies the plugin can't
-    replace). Every problem is logged AND queued for the home chat, delivered on
-    the first inbound message (adapters aren't connected yet here) — except when
-    HUMALIKE_API_URL is unset, which leaves turn-taking off and no inbound path
-    to flush through, so that one stays log-only.
+
+def _resolve(env_key: str, cfg, section: str, cfg_key: str):
+    """A platform setting as the host resolves it: env var wins, else the
+    ``config.yaml`` platform-section key, else None. Checking both keeps us from
+    warning about something the operator set in yaml instead of env."""
+    v = os.environ.get(env_key)
+    if v not in (None, ""):
+        return v
+    sec = (cfg or {}).get(section) or {}
+    if isinstance(sec, dict) and sec.get(cfg_key) not in (None, ""):
+        return str(sec.get(cfg_key))
+    return None
+
+
+def _platform_config_problems(cfg) -> list:
+    """How each connected platform will behave given its auth/mention config —
+    surfaced when the bot will answer nowhere you'd expect. Only for platforms
+    actually in use (token/vars present), read from env AND config.yaml. Framed
+    as behaviour, not error: the fully-open setup is a choice, so this informs.
+    """
+    env = os.environ
+    out = []
+
+    # ── Telegram (in use if a bot token is set) ──
+    if env.get("TELEGRAM_BOT_TOKEN"):
+        raw = _resolve("TELEGRAM_GROUP_ALLOWED_CHATS", cfg, "telegram", "group_allowed_chats") or ""
+        chats = [c.strip() for c in raw.split(",") if c.strip()]
+        users = _resolve("TELEGRAM_GROUP_ALLOWED_USERS", cfg, "telegram", "group_allowed_users")
+        if not chats and not users:
+            out.append("Telegram: no group authorized (TELEGRAM_GROUP_ALLOWED_CHATS empty) — the bot "
+                       "IGNORES every group message. Add the group's chat id (negative) or '*'.")
+        for c in chats:
+            if c != "*" and not (c.startswith("-") and c[1:].isdigit()):
+                out.append(f"Telegram: TELEGRAM_GROUP_ALLOWED_CHATS entry '{c}' is not a group id "
+                           "(group ids are negative, e.g. -100…) — that entry authorizes nothing.")
+
+    # ── Slack (in use if a token is set) ──
+    if env.get("SLACK_BOT_TOKEN") or env.get("SLACK_APP_TOKEN"):
+        if env.get("SLACK_ALLOW_ALL_USERS", "").lower() not in _TRUE and not env.get("SLACK_ALLOWED_USERS", "").strip():
+            out.append("Slack: no user authorized — the bot IGNORES everyone. "
+                       "Set SLACK_ALLOW_ALL_USERS=true, or list SLACK_ALLOWED_USERS.")
+        mention = (_resolve("SLACK_REQUIRE_MENTION", cfg, "slack", "require_mention") or "").lower()
+        free = _resolve("SLACK_FREE_RESPONSE_CHANNELS", cfg, "slack", "free_response_channels")
+        if mention not in _FALSE and not free:
+            out.append("Slack: the bot only replies when @mentioned in channels. Set "
+                       "SLACK_REQUIRE_MENTION=false (or SLACK_FREE_RESPONSE_CHANNELS) to answer unmentioned messages.")
+
+    # ── WhatsApp (in use if any WHATSAPP_* var is set) ──
+    if any(k.startswith("WHATSAPP_") for k in env):
+        policy = (_resolve("WHATSAPP_GROUP_POLICY", cfg, "whatsapp", "group_policy") or "").lower()
+        if policy and policy not in {"open", "allowlist", "disabled", "pairing"}:
+            out.append(f"WhatsApp: WHATSAPP_GROUP_POLICY='{policy}' is not valid "
+                       "(open|allowlist|disabled|pairing) — likely a typo; groups may be blocked.")
+        elif policy in ("", "pairing"):
+            out.append("WhatsApp: group policy is 'pairing' (the default) — the bot will NOT answer in "
+                       "groups until each is paired. Set WHATSAPP_GROUP_POLICY=open to answer in all groups.")
+        wrm = (_resolve("WHATSAPP_REQUIRE_MENTION", cfg, "whatsapp", "require_mention") or "").lower()
+        if wrm and wrm not in _FALSE:
+            out.append("WhatsApp: WHATSAPP_REQUIRE_MENTION is on — the bot only replies when @mentioned.")
+
+    return out
+
+
+def _should_chat_warn() -> bool:
+    """Chat-warn about config exactly ONCE ever (until the marker file is
+    removed), then never again — a deliberate setup shouldn't be nagged for
+    eternity. Only called when there ARE problems, so the marker is written the
+    first time we'd actually warn. Logs still fire every boot regardless."""
+    marker = Path.home() / ".hermes" / ".turn_taking_config_warned"
+    if marker.exists():
+        return False
+    try:
+        marker.write_text("1")
+    except Exception:
+        pass  # best-effort; worst case the warning repeats, never lost
+    return True
+
+
+def _warn_misconfig() -> None:
+    """Warn about config that silently breaks turn-taking or makes the bot
+    answer nowhere. Two families: plugin-core (URL/key/streaming/group_sessions
+    — the plugin can't work) and per-platform auth/mention (it connects but
+    ignores messages). Logged in full on every start; pushed to the home chat
+    only the FIRST time (see _should_chat_warn), so a deliberate setup isn't
+    nagged forever. URL-unset stays log-only (no inbound path to flush).
     """
     problems = []
     if not _config.service_url():
@@ -68,10 +148,11 @@ def _warn_misconfig() -> None:
         if cfg.get("group_sessions_per_user", True):  # Hermes defaults this to true
             problems.append("group_sessions_per_user is not false — set "
                             "'group_sessions_per_user: false' (group chats need one shared thread).")
+    problems += _platform_config_problems(cfg)
     for p in problems:
         _log.warning("turn-taking: %s", p)
-    if problems:
-        notify.queue_startup("⚠️ turn-taking misconfigured:\n• " + "\n• ".join(problems))
+    if problems and _should_chat_warn():
+        notify.queue_startup("⚠️ turn-taking / platform config:\n• " + "\n• ".join(problems))
 
 
 def register(ctx) -> None:
@@ -106,6 +187,10 @@ def register(ctx) -> None:
         _log.info("turn-taking: registered social-learning pre_llm_call hook")
     except Exception as e:
         _log.warning("turn-taking: could not register social-learning hook: %s", e)
+    try:
+        social_learning.warm_recent_sessions()
+    except Exception as e:
+        _log.warning("turn-taking: social-learning warm-up skipped: %s", e)
     if not _service_url():
         return  # already warned loudly in _warn_misconfig()
     sent = _patch_send()

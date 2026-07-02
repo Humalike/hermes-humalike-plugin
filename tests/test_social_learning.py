@@ -91,6 +91,60 @@ def test_cache_survives_reload_from_disk():
         sl._CACHE.pop("restart-test", None)
 
 
+def test_warm_recent_sessions_skips_already_cached():
+    """Fires _refresh_card for uncached recent sessions only, using each
+    session's DB-restored history (not the live pre_llm_call kwarg)."""
+    import tempfile
+    import threading
+
+    tmp = Path(tempfile.mkdtemp())
+    (tmp / "state.db").write_text("x")
+
+    fake_hc = types.ModuleType("hermes_constants")
+    fake_hc.get_hermes_home = lambda: tmp
+    sys.modules["hermes_constants"] = fake_hc
+
+    class FakeDB:
+        def __init__(self, db_path, read_only):
+            pass
+
+        def list_sessions_rich(self, limit, order_by_last_active):
+            return [{"id": "warm-1"}, {"id": "warm-2"}]
+
+        def get_messages_as_conversation(self, session_id):
+            return [{"role": "user", "content": "hello there"}]
+
+    fake_hs = types.ModuleType("hermes_state")
+    fake_hs.SessionDB = FakeDB
+    sys.modules["hermes_state"] = fake_hs
+
+    class SyncThread:
+        def __init__(self, target, args, daemon):
+            self._target, self._args = target, args
+
+        def start(self):
+            self._target(*self._args)
+
+    sl._CACHE.pop("warm-1", None)
+    sl._CACHE["warm-2"] = "already cached — should be skipped"
+    calls = []
+    orig_get_url, orig_refresh, orig_thread = sl._get_service_url, sl._refresh_card, threading.Thread
+    sl._get_service_url = lambda: "http://example.test"
+    sl._refresh_card = lambda session_id, history: calls.append(session_id)
+    threading.Thread = SyncThread
+    try:
+        sl.warm_recent_sessions()
+    finally:
+        threading.Thread = orig_thread
+        sl._get_service_url = orig_get_url
+        sl._refresh_card = orig_refresh
+        sl._CACHE.pop("warm-2", None)
+        sys.modules.pop("hermes_constants", None)
+        sys.modules.pop("hermes_state", None)
+
+    assert calls == ["warm-1"], calls
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

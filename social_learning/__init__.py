@@ -238,6 +238,44 @@ def _refresh_card(session_id: str, conversation_history: Any) -> None:
         notify.alert_social(exc)
 
 
+# ── Startup warm-up ──────────────────────────────────────────────────────────
+WARM_SESSIONS: int = 5
+
+
+def warm_recent_sessions(limit: int = WARM_SESSIONS) -> None:
+    """Build voice cards for the ``limit`` most-recently-active sessions at
+    plugin registration, instead of waiting for each session's first
+    ``pre_llm_call``. Read-only DB access (no write-lock contention with the
+    live gateway); each session's history is fetched via the same
+    ``get_messages_as_conversation`` the gateway itself uses to restore
+    context, so the very first reply after a fresh install already has a
+    card if that session has prior history. Best-effort: never raises."""
+    try:
+        if not _get_service_url():
+            return
+        from hermes_constants import get_hermes_home  # noqa: PLC0415
+        from hermes_state import SessionDB  # noqa: PLC0415
+
+        db_path = get_hermes_home() / "state.db"
+        if not db_path.exists():
+            return
+        db = SessionDB(db_path=db_path, read_only=True)
+        sessions = db.list_sessions_rich(limit=limit, order_by_last_active=True)
+        for s in sessions:
+            session_id = s.get("id")
+            with _LOCK:
+                already_cached = session_id in _CACHE
+            if not session_id or already_cached:
+                continue
+            history = db.get_messages_as_conversation(session_id)
+            threading.Thread(
+                target=_refresh_card, args=(session_id, history), daemon=True
+            ).start()
+        logger.info("social-learning: warm-up fired for up to %d recent session(s)", len(sessions))
+    except Exception as exc:
+        logger.debug("social-learning: warm_recent_sessions failed: %s", exc)
+
+
 # ── Hook ──────────────────────────────────────────────────────────────────────
 def on_pre_llm_call(**kwargs: Any) -> Optional[Dict[str, Any]]:
     """pre_llm_call hook: inject the voice card and (every REFRESH_EVERY turns) refresh it."""
@@ -257,8 +295,11 @@ def on_pre_llm_call(**kwargs: Any) -> Optional[Dict[str, Any]]:
             n, session_id, "cached" if has_card else "none", REFRESH_EVERY,
         )
 
-        if n % REFRESH_EVERY == 0 and _get_service_url():
-            logger.info("social-learning: turn %d session %s — firing detached refresh", n, session_id)
+        if (not has_card or n % REFRESH_EVERY == 0) and _get_service_url():
+            logger.info(
+                "social-learning: turn %d session %s — firing detached refresh (%s)",
+                n, session_id, "no card yet" if not has_card else "scheduled",
+            )
             threading.Thread(
                 target=_refresh_card,
                 args=(session_id, list(conversation_history)),
