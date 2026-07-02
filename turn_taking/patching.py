@@ -13,11 +13,11 @@ import logging
 import sys
 from typing import Any, Callable
 
-from . import state
+from . import notify, state
 from .core import _inbound_gate, _build_system_prompt_for_turn_taking, _decide, _delivery_meta
 from .service import _to_messages
 
-_log = logging.getLogger("hermes.plugins.turn_taking")
+_log = logging.getLogger(__name__)
 
 _reply_anchor_patched = False  # idempotency for _patch__reply_anchor_for_event
 _merge_patched = False  # idempotency for _patch_merge_pending_message_event
@@ -148,6 +148,8 @@ async def _handle_inbound(self: Any, event: Any) -> None:
         state.LOOP = asyncio.get_running_loop()  # capture the gateway loop for _respond scheduling
     except RuntimeError:
         pass
+    state.LAST_ADAPTER = self  # notify.py fallback when no thread ever opened
+    notify.flush_pending()  # deliver any queued startup misconfig alerts (cheap no-op after 1st)
     _patch__reply_anchor_for_event(self)  # bind per-turn raw message_id (queue-robust)
     source = event.source
     message_id = str(getattr(event, "message_id", "") or "")

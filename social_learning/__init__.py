@@ -36,7 +36,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
-logger = logging.getLogger("hermes.plugins.turn_taking")
+logger = logging.getLogger(__name__)
 
 REFRESH_EVERY: int = 5
 WINDOW: int = 100
@@ -85,6 +85,7 @@ _load_cache()
 # ── Config helpers ────────────────────────────────────────────────────────────
 # Shared with turn-taking: one HUMALIKE_API_URL + HUMALIKE_API_KEY for every Humalike call.
 from .. import _config  # noqa: E402
+from ..turn_taking import notify  # noqa: E402
 
 
 def _get_service_url() -> str:
@@ -231,8 +232,10 @@ def _refresh_card(session_id: str, conversation_history: Any) -> None:
                 "social-learning: non-200 %d for session %s (skipping, retry next cycle)",
                 response.status_code, session_id,
             )
+            notify.alert_social(status=response.status_code)
     except Exception as exc:
         logger.warning("social-learning: _refresh_card failed for session %s: %s", session_id, exc)
+        notify.alert_social(exc)
 
 
 # ── Hook ──────────────────────────────────────────────────────────────────────

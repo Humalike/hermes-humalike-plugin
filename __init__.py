@@ -28,28 +28,29 @@ from .turn_taking.patching import (
     _patch_telegram_handle_message,
     _patch_telegram_observe_group,
 )
+from .turn_taking import notify
 from .turn_taking.service import _service_url
 
-_log = logging.getLogger("hermes.plugins.turn_taking")
+_log = logging.getLogger(__name__)
 
 
 def _warn_misconfig() -> None:
     """Fail loudly at startup on every misconfig that otherwise breaks silently.
 
-    Each case below produces broken behavior with no error anywhere near the
-    cause (silent idle, 401s, per-user group sessions, streamed replies the
-    plugin can't replace) — so name the fix in the log line itself.
+    Each case produces broken behavior with no error near the cause (silent
+    idle, 401s, per-user group sessions, streamed replies the plugin can't
+    replace). Every problem is logged AND queued for the home chat, delivered on
+    the first inbound message (adapters aren't connected yet here) — except when
+    HUMALIKE_API_URL is unset, which leaves turn-taking off and no inbound path
+    to flush through, so that one stays log-only.
     """
+    problems = []
     if not _config.service_url():
-        _log.warning(
-            "turn-taking: HUMALIKE_API_URL is not set — turn-taking is DISABLED "
-            "(/soul still works). Add it to ~/.hermes/.env and restart the gateway."
-        )
+        problems.append("HUMALIKE_API_URL is not set — turn-taking is DISABLED "
+                        "(/soul still works). Add it to ~/.hermes/.env.")
     elif not _config.api_key():
-        _log.warning(
-            "turn-taking: HUMALIKE_API_KEY is not set — every Humalike call will "
-            "fail with 401. Add it to ~/.hermes/.env and restart the gateway."
-        )
+        problems.append("HUMALIKE_API_KEY is not set — every Humalike call will "
+                        "fail with 401. Add it to ~/.hermes/.env.")
     try:
         import yaml
 
@@ -58,19 +59,19 @@ def _warn_misconfig() -> None:
         cfg = {}
     except Exception as e:
         _log.warning("turn-taking: cannot read ~/.hermes/config.yaml (%s) — skipping config checks", e)
-        return
-    streaming = cfg.get("streaming")
-    if streaming is True or (isinstance(streaming, dict) and streaming.get("enabled")):
-        _log.warning(
-            "turn-taking: streaming is enabled — the plugin must own the final reply "
-            "text and will misbehave. Set 'streaming: false' in ~/.hermes/config.yaml."
-        )
-    if cfg.get("group_sessions_per_user", True):  # Hermes defaults this to true
-        _log.warning(
-            "turn-taking: group_sessions_per_user is not false — group chats get one "
-            "session per member instead of one shared thread, so the bot loses the "
-            "conversation flow. Set 'group_sessions_per_user: false' in ~/.hermes/config.yaml."
-        )
+        cfg = None
+    if cfg is not None:
+        streaming = cfg.get("streaming")
+        if streaming is True or (isinstance(streaming, dict) and streaming.get("enabled")):
+            problems.append("streaming is enabled — set 'streaming: false' in "
+                            "~/.hermes/config.yaml (the plugin must own the final reply).")
+        if cfg.get("group_sessions_per_user", True):  # Hermes defaults this to true
+            problems.append("group_sessions_per_user is not false — set "
+                            "'group_sessions_per_user: false' (group chats need one shared thread).")
+    for p in problems:
+        _log.warning("turn-taking: %s", p)
+    if problems:
+        notify.queue_startup("⚠️ turn-taking misconfigured:\n• " + "\n• ".join(problems))
 
 
 def register(ctx) -> None:

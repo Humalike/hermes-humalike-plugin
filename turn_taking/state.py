@@ -35,6 +35,11 @@ ORIG_SEND: Dict[type, Callable] = {}
 # falls back to the adapter's own (unpatched) handle_message.
 ORIG_HANDLE: Dict[type, Callable] = {}
 
+# The most recent adapter instance seen by the inbound gate. Fallback for
+# notify.py when ROUTES is empty (service dead from startup → no thread was
+# ever opened, but an alert still needs a live adapter to reach the gateway).
+LAST_ADAPTER: Any = None
+
 # ── Session → thread map: one thread per conversation ─────────────────────────
 SESSIONS: Dict[str, str] = {}  # Hermes session_id → turn-taking thread_id
 OPEN_LOCK = asyncio.Lock()     # serializes thread-opens (rare) so a burst can't double-open

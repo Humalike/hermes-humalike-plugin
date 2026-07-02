@@ -16,7 +16,9 @@ from typing import Any, Awaitable, Callable, Dict, Optional
 
 import httpx
 
-_log = logging.getLogger("hermes.plugins.turn_taking")
+from . import notify
+
+_log = logging.getLogger(__name__)
 
 # ── Wire contract (turn-taking service action paths) ──────────────────────────
 OPEN_THREAD_PATH = "/v1/turn-taking/actions/open_thread"
@@ -69,6 +71,7 @@ async def _post(path: str, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         async with httpx.AsyncClient(timeout=30.0) as client:
             r = await client.post(base + path, json=body, headers=_headers())
             r.raise_for_status()
+            notify.recovered()  # success → clear any active alert, post recovery once
             return r.json()
     except httpx.HTTPStatusError as e:
         # 4xx = our request is wrong (bad key/payload) — actionable, log loud.
@@ -76,10 +79,12 @@ async def _post(path: str, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         _log.warning(
             "turn-taking %s → HTTP %s: %s", path, e.response.status_code, e.response.text[:200]
         )
+        notify.alert(e)
         return None
     except httpx.HTTPError as e:
         # connect refused / DNS / timeout — service unreachable, fail-open.
         _log.warning("turn-taking %s unreachable: %s", path, e)
+        notify.alert(e)
         return None
     # ponytail: a non-JSON 2xx (r.json() → JSONDecodeError) and our own bugs
     # (KeyError/TypeError) now propagate instead of hiding as fail-open.
@@ -157,6 +162,7 @@ async def _receive_loop(
         import websockets
     except Exception as e:  # dependency missing
         _log.warning("turn-taking WS unavailable (no websockets lib): %s", e)
+        notify.alert(e, notify.WS_LOST, kind="ws")
         return
     try:
         async with websockets.connect(connect_url) as ws:
@@ -175,6 +181,7 @@ async def _receive_loop(
                     await on_typing(data.get("thread_id"), data.get("typing"))
     except Exception as e:
         _log.warning("turn-taking WS loop ended: %s", e)
+        notify.alert(e, notify.WS_LOST, kind="ws")
 
 
 # ── Hermes wiring: inbound events → service batch ─────────────────────────────
