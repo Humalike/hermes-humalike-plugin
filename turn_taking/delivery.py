@@ -15,7 +15,7 @@ from typing import Any, Optional
 from . import state
 from .service import _connect_url, _receive_loop, _thread_id, open_thread
 
-_log = logging.getLogger("hermes.plugins.turn_taking")
+_log = logging.getLogger(__name__)
 
 
 def _set_route(thread_id: str, adapter: Any, chat_id: str) -> None:

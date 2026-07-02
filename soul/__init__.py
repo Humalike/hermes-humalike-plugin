@@ -23,7 +23,7 @@ from typing import Any, Dict, Optional
 
 import httpx
 
-_log = logging.getLogger("hermes.plugins.turn_taking")
+_log = logging.getLogger(__name__)
 
 _HERMES_CONFIG = Path.home() / ".hermes" / "config.yaml"
 _AUTO_MARKER = _HERMES_CONFIG.with_name(".soul_auto_enhanced")  # one-shot guard
@@ -50,7 +50,7 @@ def _cfg() -> Dict[str, Any]:
 
 
 def _api_url() -> str:
-    url = os.getenv("HUMALIKE_API_URL") or str(_cfg().get("personas_api_url") or DEFAULT_API)
+    url = os.getenv("HUMALIKE_API_URL") or DEFAULT_API
     return url.rstrip("/")
 
 

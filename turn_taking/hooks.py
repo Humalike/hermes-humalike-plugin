@@ -16,7 +16,7 @@ from . import state
 from .core import _build_system_prompt_for_turn_taking, _respond
 from .delivery import _chat_for_session
 
-_log = logging.getLogger("hermes.plugins.turn_taking")
+_log = logging.getLogger(__name__)
 
 
 def _suppress_answer(chat_id: str, content: str) -> None:

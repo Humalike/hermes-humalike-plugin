@@ -17,7 +17,7 @@ from .. import social_learning
 from .delivery import _ensure_thread
 from .service import _HERMES_CONFIG, _to_messages, respond, submit_messages
 
-_log = logging.getLogger("hermes.plugins.turn_taking")
+_log = logging.getLogger(__name__)
 
 
 def _build_system_prompt_for_turn_taking(adapter: Any = None, session_id: Optional[str] = None) -> Optional[str]:
