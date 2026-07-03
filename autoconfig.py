@@ -3,12 +3,14 @@
 Applies the deterministic parts of the install/configure skills so a fresh
 install needs no hand-editing (the same zero-config principle as login.py):
 
-* ``~/.hermes/config.yaml`` — the settings the plugin REQUIRES to own the
-  reply: ``streaming: false``, ``group_sessions_per_user: false``,
-  ``display.tool_progress: "off"`` (install-turn-taking step 3).
-* ``~/.hermes/.env`` — respond-to-everyone settings for platforms actually in
-  use, only where the operator hasn't set a value: WhatsApp
-  (configure-whatsapp-group) and Slack (configure-slack-group).
+* ``config.yaml`` — the settings the plugin REQUIRES to own the reply:
+  ``streaming: false``, ``group_sessions_per_user: false``,
+  ``display.tool_progress: "off"`` (install-turn-taking step 3), and
+  ``slack.reply_in_thread: false`` when Slack is in use (the default trues it,
+  making every top-level channel message its own thread AND session).
+* ``.env`` — respond-to-everyone settings for platforms actually in use, only
+  where the operator hasn't set a value: WhatsApp (configure-whatsapp-group)
+  and Slack (configure-slack-group).
 * Telegram can't be automated — BotFather's privacy toggle is external and
   group chat ids are unknowable — so those two steps are prompted instead
   (configure-telegram-group).
@@ -16,8 +18,11 @@ install needs no hand-editing (the same zero-config principle as login.py):
 Each section applies ONCE (the marker file lists finished sections), so an
 operator who later overrides a value isn't fought every boot — but adding a
 new platform later still triggers just that platform's section. The report is
-shown TUI-safely via login._show once the TUI is up. config.yaml is rewritten
-via yaml round-trip; comments there are lost — keys and values are preserved.
+granular and TUI-safe (login._show): every swept section shows its status —
+``✓`` already right, ``•`` fixed, ``📋`` manual steps — so the operator always
+sees what was checked, not just what changed. Normal boots (marker complete)
+stay silent. config.yaml is rewritten via yaml round-trip; comments there are
+lost — keys and values are preserved.
 """
 
 from __future__ import annotations
@@ -59,26 +64,31 @@ _TELEGRAM_TODO = (
 def plan(cfg: dict, env: dict, done: set) -> tuple[dict, dict, list, list, list]:
     """Decide what's left to configure. Pure — takes the current config.yaml
     dict, a merged env view, and the already-done sections; returns
-    ``(config_updates, env_updates, notes, todos, sections)``."""
+    ``(config_updates, env_updates, statuses, todos, sections)`` where
+    ``statuses`` is ``[("fixed"|"ok", label), …]`` — one entry per swept
+    section, so the report can show verified items, not just changed ones."""
     config_updates: dict = {}
     env_updates: dict = {}
-    notes: list = []
+    statuses: list = []
     todos: list = []
     sections: list = []
 
     # ── Core chat settings (required — fixed even if set the wrong way) ──
     if "core" not in done:
+        fixes = []
         if cfg.get("streaming") is not False:
             config_updates["streaming"] = False
+            fixes.append("streaming off")
         if cfg.get("group_sessions_per_user") is not False:
             config_updates["group_sessions_per_user"] = False
+            fixes.append("one shared thread per group")
         display = cfg.get("display") if isinstance(cfg.get("display"), dict) else {}
         if display.get("tool_progress") != "off":
             config_updates["display"] = {**display, "tool_progress": "off"}
+            fixes.append("tool-call chatter hidden")
         sections.append("core")
-        if config_updates:
-            notes.append("core chat settings — streaming off, one shared thread per "
-                         "group, tool-call chatter hidden")
+        statuses.append(("fixed", "chat settings — " + ", ".join(fixes)) if fixes
+                        else ("ok", "chat settings"))
 
     # ── WhatsApp: respond to everyone (only fills keys the operator left unset) ──
     if "whatsapp" not in done and (env.get("WHATSAPP_ENABLED") or "").lower() in _TRUE:
@@ -88,8 +98,9 @@ def plan(cfg: dict, env: dict, done: set) -> tuple[dict, dict, list, list, list]
             if not env.get(key):
                 env_updates[key] = value
         sections.append("whatsapp")
-        if any(k.startswith("WHATSAPP") for k in env_updates):
-            notes.append("WhatsApp — respond to everyone, in every group, no @mention")
+        fixed = any(k.startswith("WHATSAPP") for k in env_updates)
+        statuses.append(("fixed", "WhatsApp — respond to everyone, in every group, no @mention")
+                        if fixed else ("ok", "WhatsApp"))
 
     # ── Slack: respond to everyone (same only-if-unset rule), plus the one
     # config.yaml key turn-taking REQUIRES there: reply_in_thread: false —
@@ -104,17 +115,20 @@ def plan(cfg: dict, env: dict, done: set) -> tuple[dict, dict, list, list, list]
         if slack_cfg.get("reply_in_thread") is not False:
             config_updates["slack"] = {**slack_cfg, "reply_in_thread": False}
         sections.append("slack")
-        if any(k.startswith("SLACK") for k in env_updates) or "slack" in config_updates:
-            notes.append("Slack — respond to everyone, no @mention, one shared "
-                         "conversation per channel (reply_in_thread off)")
+        fixed = any(k.startswith("SLACK") for k in env_updates) or "slack" in config_updates
+        statuses.append(("fixed", "Slack — respond to everyone, no @mention, one shared "
+                                  "conversation per channel (reply_in_thread off)")
+                        if fixed else ("ok", "Slack"))
 
     # ── Telegram: prompt-only (once) ──
     if "telegram" not in done and env.get("TELEGRAM_BOT_TOKEN"):
         sections.append("telegram")
         if not env.get("TELEGRAM_GROUP_ALLOWED_CHATS"):
             todos.append(_TELEGRAM_TODO)
+        else:
+            statuses.append(("ok", "Telegram"))
 
-    return config_updates, env_updates, notes, todos, sections
+    return config_updates, env_updates, statuses, todos, sections
 
 
 def _merged_env() -> dict:
@@ -144,7 +158,7 @@ def maybe_autoconfigure() -> None:
         _log.warning("turn-taking: autoconfig cannot read %s (%s) — config part skipped", _CONFIG, e)
         cfg_writable = False
 
-    config_updates, env_updates, notes, todos, sections = plan(cfg, _merged_env(), done)
+    config_updates, env_updates, statuses, todos, sections = plan(cfg, _merged_env(), done)
     if not sections:
         return
 
@@ -157,8 +171,8 @@ def maybe_autoconfigure() -> None:
             _CONFIG.write_text(yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True))
         except Exception as e:
             _log.warning("turn-taking: autoconfig could not write %s: %s", _CONFIG, e)
-            notes = [n for n in notes if not n.startswith("core chat settings")]
             sections = [s for s in sections if s != "core"]  # retry next boot
+            statuses = [s for s in statuses if not s[1].startswith("chat settings")]
     if env_updates:
         try:
             login.upsert_env(login.HERMES_ENV, env_updates)
@@ -172,27 +186,25 @@ def maybe_autoconfigure() -> None:
     except Exception:
         pass  # best-effort; worst case a section re-applies (it is idempotent)
 
-    for note in notes:
-        _log.warning("turn-taking: autoconfigured %s", note)
+    for kind, label in statuses:
+        if kind == "fixed":
+            _log.warning("turn-taking: autoconfigured %s", label)
+        else:
+            _log.info("turn-taking: autoconfig verified %s — already right", label)
+    if not statuses and not todos:
+        return
 
-    if notes or todos:
-        parts = []
-        if notes:
-            parts.append("🔧 Humalike plugin — configured hermes for turn-taking:\n"
-                         + "\n".join(f"   • {n}" for n in notes)
-                         + "\n   Restart hermes once to apply.")
-        parts.extend(todos)
-        report = "\n\n" + "\n\n".join(parts) + "\n"
-    else:
-        # Nothing needed changing — still confirm ONCE (a sweep only runs when
-        # the marker was missing): a fresh or re-armed install should get
-        # positive confirmation, not silence that reads as failure.
-        names = {"core": "chat settings", "whatsapp": "WhatsApp", "slack": "Slack",
-                 "telegram": "Telegram"}
-        checked = ", ".join(names.get(s, s) for s in sections)
-        report = (f"\n✅ Humalike plugin — hermes is already configured for "
-                  f"turn-taking (checked: {checked}).\n")
-        _log.info("turn-taking: autoconfig verified — nothing to change (%s)", checked)
+    any_fixed = any(kind == "fixed" for kind, _ in statuses)
+    header = ("🔧 Humalike plugin — configured hermes for turn-taking:" if any_fixed
+              else "✅ Humalike plugin — turn-taking setup verified:")
+    lines = [f"   {'•' if kind == 'fixed' else '✓'} {label}"
+             + ("" if kind == "fixed" else " — already right")
+             for kind, label in statuses]
+    if any_fixed:
+        lines.append("   Restart hermes once to apply.")
+    parts = ["\n".join([header] + lines)] if statuses else []
+    parts.extend(todos)
+    report = "\n\n" + "\n\n".join(parts) + "\n"
 
     def _announce() -> None:
         login._wait_for_tui()

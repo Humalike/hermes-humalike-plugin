@@ -45,34 +45,45 @@ def _plan(cfg=None, env=None, done=None):
 
 # ── Core config ───────────────────────────────────────────────────────────────
 def test_fresh_install_fixes_all_core_settings():
-    config_updates, env_updates, notes, todos, sections = _plan()
+    config_updates, env_updates, statuses, todos, sections = _plan()
     assert config_updates == {"streaming": False, "group_sessions_per_user": False,
                               "display": {"tool_progress": "off"}}, config_updates
     assert not env_updates and not todos
-    assert sections == ["core"] and notes
+    assert sections == ["core"]
+    assert statuses[0][0] == "fixed" and "chat settings" in statuses[0][1]
 
 
-def test_compliant_config_marks_core_done_without_changes():
-    config_updates, _, notes, _, sections = _plan(cfg=dict(_COMPLIANT))
-    assert not config_updates and not notes
+def test_compliant_config_verifies_core_without_changes():
+    config_updates, _, statuses, _, sections = _plan(cfg=dict(_COMPLIANT))
+    assert not config_updates
+    assert statuses == [("ok", "chat settings")]  # granular ✓, not silence
     assert sections == ["core"]  # recorded so it isn't re-checked every boot
 
 
 def test_core_done_is_skipped_and_display_merge_preserves_keys():
-    config_updates, _, _, _, sections = _plan(cfg=dict(_COMPLIANT), done={"core"})
-    assert not config_updates and not sections
+    config_updates, _, statuses, _, sections = _plan(cfg=dict(_COMPLIANT), done={"core"})
+    assert not config_updates and not statuses and not sections
     config_updates, _, _, _, _ = _plan(cfg={"display": {"theme": "x"}})
     assert config_updates["display"] == {"theme": "x", "tool_progress": "off"}
 
 
 # ── Platforms ─────────────────────────────────────────────────────────────────
 def test_whatsapp_fills_only_unset_keys():
-    _, env_updates, notes, _, sections = _plan(
+    _, env_updates, statuses, _, sections = _plan(
         cfg=dict(_COMPLIANT), done={"core"},
         env={"WHATSAPP_ENABLED": "true", "WHATSAPP_GROUP_POLICY": "allowlist"})
     assert env_updates == {"WHATSAPP_ALLOW_ALL_USERS": "true",
                            "WHATSAPP_REQUIRE_MENTION": "false"}, env_updates
-    assert "whatsapp" in sections and notes
+    assert "whatsapp" in sections
+    assert ("fixed", "WhatsApp — respond to everyone, in every group, no @mention") in statuses
+
+
+def test_whatsapp_already_right_shows_verified():
+    _, env_updates, statuses, _, _ = _plan(done={"core"}, env={
+        "WHATSAPP_ENABLED": "true", "WHATSAPP_ALLOW_ALL_USERS": "true",
+        "WHATSAPP_REQUIRE_MENTION": "false", "WHATSAPP_GROUP_POLICY": "open"})
+    assert not env_updates
+    assert ("ok", "WhatsApp") in statuses
 
 
 def test_whatsapp_not_enabled_or_done_is_skipped():
@@ -84,19 +95,22 @@ def test_whatsapp_not_enabled_or_done_is_skipped():
 
 
 def test_slack_fills_only_unset_keys_and_forces_reply_in_thread_off():
-    config_updates, env_updates, _, _, sections = _plan(
+    config_updates, env_updates, statuses, _, sections = _plan(
         done={"core"},
         env={"SLACK_APP_TOKEN": "xapp-1", "SLACK_ALLOW_ALL_USERS": "true"})
     assert env_updates == {"SLACK_REQUIRE_MENTION": "false"}, env_updates
     assert config_updates == {"slack": {"reply_in_thread": False}}, config_updates
     assert "slack" in sections
+    assert statuses and statuses[-1][0] == "fixed"
 
 
-def test_slack_reply_in_thread_already_off_and_merge_preserves_keys():
-    config_updates, _, _, _, _ = _plan(
+def test_slack_already_right_shows_verified_and_merge_preserves_keys():
+    config_updates, _, statuses, _, _ = _plan(
         done={"core"}, cfg={"slack": {"reply_in_thread": False}},
-        env={"SLACK_BOT_TOKEN": "xoxb-1"})
+        env={"SLACK_BOT_TOKEN": "xoxb-1", "SLACK_ALLOW_ALL_USERS": "true",
+             "SLACK_REQUIRE_MENTION": "false"})
     assert "slack" not in config_updates
+    assert ("ok", "Slack") in statuses
     config_updates, _, _, _, _ = _plan(
         done={"core"}, cfg={"slack": {"require_mention": False}},
         env={"SLACK_BOT_TOKEN": "xoxb-1"})
@@ -104,15 +118,16 @@ def test_slack_reply_in_thread_already_off_and_merge_preserves_keys():
 
 
 def test_telegram_is_prompt_only():
-    _, env_updates, _, todos, sections = _plan(
+    _, env_updates, statuses, todos, sections = _plan(
         done={"core"}, env={"TELEGRAM_BOT_TOKEN": "123:abc"})
     assert not env_updates  # never guesses chat ids
     assert "telegram" in sections
     assert todos and "BotFather" in todos[0]
-    # chats already configured → nothing to prompt
-    _, _, _, todos, _ = _plan(done={"core"}, env={
+    # chats already configured → verified, nothing to prompt
+    _, _, statuses, todos, _ = _plan(done={"core"}, env={
         "TELEGRAM_BOT_TOKEN": "123:abc", "TELEGRAM_GROUP_ALLOWED_CHATS": "-100123"})
     assert not todos
+    assert ("ok", "Telegram") in statuses
 
 
 # ── upsert_env (the generic writer autoconfig relies on) ─────────────────────
