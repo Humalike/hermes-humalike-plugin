@@ -104,7 +104,7 @@ plugin's report ends with that reminder.
 `~/.hermes/.env` (`Authorization: Bearer`):
 
 ```bash
-HUMALIKE_API_KEY=your-api-key   # skips the device login
+HUMALIKE_API_KEY=your-api-key   # skips the login prompt
 HUMALIKE_API_URL=…              # non-default environment; set EMPTY to disable turn-taking
 ```
 
