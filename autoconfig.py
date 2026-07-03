@@ -52,7 +52,8 @@ _ENV_KEYS = (
 )
 
 _TELEGRAM_TODO = (
-    "📋 Telegram needs two manual steps (they can't be automated):\n"
+    "📋 ACTION REQUIRED — Telegram needs two manual steps from you "
+    "(they can't be automated):\n"
     "   1. @BotFather → /setprivacy → Disable — then remove the bot from the\n"
     "      group and re-add it (the change only applies to a fresh membership).\n"
     "   2. Add the group's chat id to TELEGRAM_GROUP_ALLOWED_CHATS in\n"
