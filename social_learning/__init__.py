@@ -89,8 +89,10 @@ from ..turn_taking import notify  # noqa: E402
 
 
 def _get_service_url() -> str:
-    """Base URL (``HUMALIKE_API_URL``)."""
-    return _config.service_url()
+    """Base URL (``HUMALIKE_API_URL``) — empty while no API key is set, so no
+    conversation transcript ever leaves the machine keyless (the call would
+    401 anyway; /connect un-gates this in-process, no restart needed)."""
+    return _config.service_url() if _config.api_key() else ""
 
 
 def _log_requests_enabled() -> bool:

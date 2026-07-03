@@ -167,6 +167,39 @@ def test_upsert_env_updates_many_and_preserves_comments():
         assert "SLACK_REQUIRE_MENTION=true" not in lines
 
 
+def test_corrupt_config_yaml_never_marks_done_or_claims_fixed():
+    """Unparseable config.yaml: the operator's file is untouched, 'core' is
+    NOT recorded as done (so the required fixes retry next boot), and no
+    config-file fix is announced as applied."""
+    tmp = Path(tempfile.mkdtemp())
+    orig = (autoconfig._CONFIG, autoconfig._MARKER, autoconfig._merged_env,
+            autoconfig.threading, login._show, login._wait_for_tui)
+    shown = []
+
+    class SyncThread:
+        def __init__(self, target=None, daemon=None, name=None):
+            self._t = target
+
+        def start(self):
+            self._t()
+
+    autoconfig._CONFIG = tmp / "config.yaml"
+    autoconfig._MARKER = tmp / "marker"
+    autoconfig._CONFIG.write_text("streaming: [unclosed")
+    autoconfig._merged_env = lambda: {}
+    autoconfig.threading = types.SimpleNamespace(Thread=SyncThread)
+    login._show, login._wait_for_tui = shown.append, lambda: None
+    try:
+        autoconfig.maybe_autoconfigure()
+        assert autoconfig._CONFIG.read_text() == "streaming: [unclosed"  # never clobbered
+        done = set(autoconfig._MARKER.read_text().split()) if autoconfig._MARKER.exists() else set()
+        assert "core" not in done, done  # retried next boot
+        assert not any("streaming" in s for s in shown), shown  # no false 'fixed' claim
+    finally:
+        (autoconfig._CONFIG, autoconfig._MARKER, autoconfig._merged_env,
+         autoconfig.threading, login._show, login._wait_for_tui) = orig
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

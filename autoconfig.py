@@ -200,8 +200,12 @@ def maybe_autoconfigure() -> None:
     if not sections:
         return
 
-    if config_updates and cfg_writable:
+    if config_updates:
         try:
+            if not cfg_writable:
+                # Unreadable/unparseable yaml: same recovery as a failed write —
+                # don't record 'done', don't claim 'fixed'; retry next boot.
+                raise RuntimeError("config.yaml unreadable — not overwriting")
             import yaml
 
             cfg.update(config_updates)

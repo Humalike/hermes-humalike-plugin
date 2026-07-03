@@ -67,6 +67,11 @@ async def _post(path: str, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     base = _service_url()
     if not base:
         return None
+    if not _api_key():
+        # Keyless: never ship conversation content off-machine just to collect
+        # a 401. Fail-open exactly like an unreachable service; /connect puts
+        # the key live in-process, so this un-gates without a restart.
+        return None
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             r = await client.post(base + path, json=body, headers=_headers())

@@ -145,6 +145,19 @@ def test_warm_recent_sessions_skips_already_cached():
     assert calls == ["warm-1"], calls
 
 
+def test_service_url_empty_without_api_key():
+    """Keyless: the gate every refresh path checks must be empty — no
+    transcript leaves the machine just to collect a 401."""
+    import os
+    from unittest.mock import patch
+
+    with patch.dict(os.environ, {"HUMALIKE_API_URL": "http://x"}, clear=False):
+        os.environ.pop("HUMALIKE_API_KEY", None)
+        assert sl._get_service_url() == ""
+        os.environ["HUMALIKE_API_KEY"] = "k"
+        assert sl._get_service_url() == "http://x"
+
+
 def test_spawn_refresh_dedups_in_flight():
     """While a refresh runs for a session, further spawns for it are skipped."""
     import threading
