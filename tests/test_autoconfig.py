@@ -50,7 +50,8 @@ def test_fresh_install_fixes_all_core_settings():
                               "display": {"tool_progress": "off"}}, config_updates
     assert not env_updates and not todos
     assert sections == ["core"]
-    assert statuses[0][0] == "fixed" and "chat settings" in statuses[0][1]
+    assert len(statuses) == 3 and all(k == "fixed" for k, _ in statuses)
+    assert "streaming: (unset) → false" in statuses[0][1]  # old → new shown
 
 
 def test_compliant_config_verifies_core_without_changes():
@@ -75,7 +76,10 @@ def test_whatsapp_fills_only_unset_keys():
     assert env_updates == {"WHATSAPP_ALLOW_ALL_USERS": "true",
                            "WHATSAPP_REQUIRE_MENTION": "false"}, env_updates
     assert "whatsapp" in sections
-    assert ("fixed", "WhatsApp — respond to everyone, in every group, no @mention") in statuses
+    fixed = [t for k, t in statuses if k == "fixed"]
+    assert any(t.startswith("WHATSAPP_ALLOW_ALL_USERS: (unset) → true") for t in fixed), fixed
+    assert any(t.startswith("WHATSAPP_REQUIRE_MENTION: (unset) → false") for t in fixed), fixed
+    assert not any("GROUP_POLICY" in t for t in fixed)  # preset key untouched
 
 
 def test_whatsapp_already_right_shows_verified():

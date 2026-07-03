@@ -61,6 +61,15 @@ _TELEGRAM_TODO = (
 )
 
 
+def _was(value) -> str:
+    """The previous value, human-readable: ``(unset)`` / yaml-style booleans."""
+    if value is None or value == "":
+        return "(unset)"
+    if isinstance(value, bool):
+        return str(value).lower()
+    return str(value)
+
+
 def plan(cfg: dict, env: dict, done: set) -> tuple[dict, dict, list, list, list]:
     """Decide what's left to configure. Pure — takes the current config.yaml
     dict, a merged env view, and the already-done sections; returns
@@ -78,47 +87,67 @@ def plan(cfg: dict, env: dict, done: set) -> tuple[dict, dict, list, list, list]
         fixes = []
         if cfg.get("streaming") is not False:
             config_updates["streaming"] = False
-            fixes.append("streaming off")
+            fixes.append(f"streaming: {_was(cfg.get('streaming'))} → false — the plugin must "
+                         "own the final reply text (config.yaml)")
         if cfg.get("group_sessions_per_user") is not False:
             config_updates["group_sessions_per_user"] = False
-            fixes.append("one shared thread per group")
+            fixes.append(f"group_sessions_per_user: {_was(cfg.get('group_sessions_per_user'))} "
+                         "→ false — a group chat needs ONE shared conversation, not one per "
+                         "member (config.yaml)")
         display = cfg.get("display") if isinstance(cfg.get("display"), dict) else {}
         if display.get("tool_progress") != "off":
             config_updates["display"] = {**display, "tool_progress": "off"}
-            fixes.append("tool-call chatter hidden")
+            fixes.append(f"display.tool_progress: {_was(display.get('tool_progress'))} → off — "
+                         "hide tool-call chatter (Browsing/Clicking…) so replies read as human "
+                         "(config.yaml)")
         sections.append("core")
-        statuses.append(("fixed", "chat settings — " + ", ".join(fixes)) if fixes
-                        else ("ok", "chat settings"))
+        statuses.extend(("fixed", f) for f in fixes)
+        if not fixes:
+            statuses.append(("ok", "chat settings"))
 
     # ── WhatsApp: respond to everyone (only fills keys the operator left unset) ──
     if "whatsapp" not in done and (env.get("WHATSAPP_ENABLED") or "").lower() in _TRUE:
-        for key, value in (("WHATSAPP_ALLOW_ALL_USERS", "true"),
-                           ("WHATSAPP_REQUIRE_MENTION", "false"),
-                           ("WHATSAPP_GROUP_POLICY", "open")):
+        wa_fixes = 0
+        for key, value, why in (
+            ("WHATSAPP_ALLOW_ALL_USERS", "true", "reply to any sender, not only paired users"),
+            ("WHATSAPP_REQUIRE_MENTION", "false", "reply without needing an @mention"),
+            ("WHATSAPP_GROUP_POLICY", "open", "answer in every group — the default "
+                                              "'pairing' blocks groups"),
+        ):
             if not env.get(key):
                 env_updates[key] = value
+                statuses.append(("fixed", f"{key}: {_was(env.get(key))} → {value} — {why} (.env)"))
+                wa_fixes += 1
         sections.append("whatsapp")
-        fixed = any(k.startswith("WHATSAPP") for k in env_updates)
-        statuses.append(("fixed", "WhatsApp — respond to everyone, in every group, no @mention")
-                        if fixed else ("ok", "WhatsApp"))
+        if not wa_fixes:
+            statuses.append(("ok", "WhatsApp"))
 
     # ── Slack: respond to everyone (same only-if-unset rule), plus the one
     # config.yaml key turn-taking REQUIRES there: reply_in_thread: false —
     # the default trues it, making every top-level channel message its own
     # thread AND session, so turn-taking can never coalesce a conversation. ──
     if "slack" not in done and (env.get("SLACK_BOT_TOKEN") or env.get("SLACK_APP_TOKEN")):
-        for key, value in (("SLACK_ALLOW_ALL_USERS", "true"),
-                           ("SLACK_REQUIRE_MENTION", "false")):
+        slack_fixes = 0
+        for key, value, why in (
+            ("SLACK_ALLOW_ALL_USERS", "true", "reply to anyone in the workspace"),
+            ("SLACK_REQUIRE_MENTION", "false", "see and answer unmentioned channel messages"),
+        ):
             if not env.get(key):
                 env_updates[key] = value
+                statuses.append(("fixed", f"{key}: {_was(env.get(key))} → {value} — {why} (.env)"))
+                slack_fixes += 1
         slack_cfg = cfg.get("slack") if isinstance(cfg.get("slack"), dict) else {}
         if slack_cfg.get("reply_in_thread") is not False:
             config_updates["slack"] = {**slack_cfg, "reply_in_thread": False}
+            statuses.append(("fixed", "slack.reply_in_thread: "
+                                      f"{_was(slack_cfg.get('reply_in_thread'))} → false — one "
+                                      "shared conversation per channel; the default makes EVERY "
+                                      "message its own thread and session, so the bot answers "
+                                      "each one separately (config.yaml)"))
+            slack_fixes += 1
         sections.append("slack")
-        fixed = any(k.startswith("SLACK") for k in env_updates) or "slack" in config_updates
-        statuses.append(("fixed", "Slack — respond to everyone, no @mention, one shared "
-                                  "conversation per channel (reply_in_thread off)")
-                        if fixed else ("ok", "Slack"))
+        if not slack_fixes:
+            statuses.append(("ok", "Slack"))
 
     # ── Telegram: prompt-only (once) ──
     if "telegram" not in done and env.get("TELEGRAM_BOT_TOKEN"):
@@ -172,7 +201,9 @@ def maybe_autoconfigure() -> None:
         except Exception as e:
             _log.warning("turn-taking: autoconfig could not write %s: %s", _CONFIG, e)
             sections = [s for s in sections if s != "core"]  # retry next boot
-            statuses = [s for s in statuses if not s[1].startswith("chat settings")]
+            statuses = [s for s in statuses
+                        if not s[1].startswith(("streaming:", "group_sessions_per_user:",
+                                                "display.", "slack.reply_in_thread:"))]
     if env_updates:
         try:
             login.upsert_env(login.HERMES_ENV, env_updates)
