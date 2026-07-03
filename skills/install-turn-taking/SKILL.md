@@ -26,22 +26,16 @@ hermes plugins enable humalike
 ## 2. Connect the Humalike account
 
 No env vars needed. If the user already has an API key, put it in
-`~/.hermes/.env` (create if missing) and skip the login:
+`~/.hermes/.env` (create if missing):
 
 ```bash
 HUMALIKE_API_KEY=their-api-key   # optional — only when they already have one
 ```
 
-Otherwise run the device login now, in the terminal:
-
-```bash
-python3 ~/.hermes/plugins/humalike/login.py
-```
-
-It prints the approval URL and opens a browser tab when the install machine
-has one; the user approves on any device (phone works) and the key lands in
-`.env` before first boot. If you skip this, the first gateway start pops the
-same login automatically, and `/connect` in chat (step 4) is the fallback.
+Otherwise leave it unset: the first Hermes start (step 4) prints a login URL on
+the console (and opens a browser tab when the machine has one). The user
+approves on any device (phone works) and the key is saved to `~/.hermes/.env`.
+`/connect` in chat does the same at any time.
 
 ## 3. Required config
 

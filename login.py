@@ -1,17 +1,10 @@
-#!/usr/bin/env python3
-"""Terminal device-authorization login — the install-time cousin of /connect.
-
-Run it right after installing the plugin (stdlib only — no Hermes venv, no
-httpx):
-
-    python3 ~/.hermes/plugins/humalike/login.py
+"""Device-authorization login (stdlib only, no httpx).
 
 Prints the approval URL (and opens a browser tab when the machine has one — on
 SSH/headless boxes open the printed link on your phone), polls until the link
 is approved, then writes HUMALIKE_API_KEY into ``~/.hermes/.env``.
 
-Three callers share this module:
-  * the terminal (``__main__``) — install-time login,
+Two callers share this module (it is not a standalone script):
   * ``register()`` via :func:`maybe_first_boot_login` — pops the login once on
     the first keyless gateway boot (marker-guarded),
   * ``connect.py`` — reuses :func:`poll_session` and :func:`write_env_key`.
@@ -27,7 +20,6 @@ import logging
 import os
 import platform
 import socket
-import sys
 import threading
 import time
 import urllib.request
@@ -44,6 +36,7 @@ def _hermes_home() -> Path:
 
         return Path(get_hermes_home())
     except Exception:
+        # hermes_constants not importable (e.g. imported outside the gateway venv)
         return Path(os.getenv("HERMES_HOME") or "~/.hermes").expanduser()
 
 
@@ -200,7 +193,7 @@ def poll_session(session: dict, bearer: str, on_wait=None) -> dict:
     return {"status": "expired"}
 
 
-# ── Terminal flow ─────────────────────────────────────────────────────────────
+# ── Login flow (internal; run on a daemon thread by maybe_first_boot_login) ───
 def run(wait_for_tui: bool = False) -> int:
     """0 = key saved (or already present), 1 = failed/denied/expired.
 
@@ -265,7 +258,7 @@ def run(wait_for_tui: bool = False) -> int:
         _show(f"\n✅ Connected as {who} — key saved to {HERMES_ENV}.\n")
         return 0
     _log.warning("humalike login: %s", status)
-    _show(f"\nLogin {status} — send the bot /connect (or rerun login.py) to retry.\n")
+    _show(f"\nLogin {status} — send the bot /connect to retry.\n")
     return 1
 
 
@@ -276,8 +269,8 @@ def maybe_first_boot_login() -> None:
     daemon thread so boot never blocks on the ~10-minute approval window.
 
     Marker written when the prompt FIRES, not on success — an ignored tab must
-    not reopen on every boot. Retry paths: delete the marker, rerun login.py,
-    or send /connect."""
+    not reopen on every boot. Retry paths: delete the marker and restart, or
+    send /connect."""
     if cfg("HUMALIKE_API_KEY"):
         return  # already connected
     if not gateway_key():
@@ -292,7 +285,3 @@ def maybe_first_boot_login() -> None:
     except OSError:
         pass  # best-effort; worst case the prompt repeats next boot
     threading.Thread(target=lambda: run(wait_for_tui=True), daemon=True, name="humalike-login").start()
-
-
-if __name__ == "__main__":
-    sys.exit(run())
