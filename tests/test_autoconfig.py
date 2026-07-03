@@ -134,6 +134,20 @@ def test_telegram_is_prompt_only():
     assert ("ok", "Telegram") in statuses
 
 
+def test_every_changed_value_reports_old_to_new():
+    """Completeness invariant: a full fresh sweep (all platforms in use,
+    nothing configured) changes 9 values, and EVERY one reports 'old → new'."""
+    config_updates, env_updates, statuses, _, _ = _plan(env={
+        "WHATSAPP_ENABLED": "true", "SLACK_BOT_TOKEN": "xoxb-1",
+        "TELEGRAM_BOT_TOKEN": "123:abc"})
+    fixed = [t for k, t in statuses if k == "fixed"]
+    assert len(fixed) == 9, fixed  # 3 core + 3 whatsapp + 2 slack env + 1 slack cfg
+    assert all(" → " in t for t in fixed), [t for t in fixed if " → " not in t]
+    assert all("(.env)" in t or "(config.yaml)" in t for t in fixed), fixed
+    # and the plan really contains all 9 writes
+    assert len(env_updates) == 5 and len(config_updates) == 4
+
+
 # ── upsert_env (the generic writer autoconfig relies on) ─────────────────────
 def test_upsert_env_updates_many_and_preserves_comments():
     with tempfile.TemporaryDirectory() as d:
