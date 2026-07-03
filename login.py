@@ -30,7 +30,7 @@ _log = logging.getLogger(__name__)
 def _hermes_home() -> Path:
     """The real hermes home: the host's single source of truth when importable
     (HERMES_HOME-aware, platform-native defaults), else the env var, else
-    ``~/.hermes`` (login.py run standalone outside the hermes venv)."""
+    ``~/.hermes`` (when hermes_constants isn't importable)."""
     try:
         from hermes_constants import get_hermes_home  # noqa: PLC0415
 
