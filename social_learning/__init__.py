@@ -261,7 +261,12 @@ def _spawn_refresh(session_id: str, history: Any) -> bool:
             with _LOCK:
                 _REFRESHING.discard(session_id)
 
-    threading.Thread(target=_run, daemon=True).start()
+    try:
+        threading.Thread(target=_run, daemon=True).start()
+    except Exception:
+        with _LOCK:
+            _REFRESHING.discard(session_id)  # don't leak the guard: the run never happened
+        raise
     return True
 
 

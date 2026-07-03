@@ -151,7 +151,14 @@ def test_spawn_refresh_dedups_in_flight():
 
     calls = []
     orig_refresh, orig_thread = sl._refresh_card, threading.Thread
-    sl._refresh_card = lambda session_id, history: calls.append(session_id)
+
+    def fake_refresh(session_id, history):
+        # The guard must be SET while the refresh runs — catches a regression
+        # that drops _REFRESHING.add (dedup would silently stop deduping).
+        assert session_id in sl._REFRESHING, "in-flight guard not set during refresh"
+        calls.append(session_id)
+
+    sl._refresh_card = fake_refresh
 
     class SyncThread:
         def __init__(self, target=None, args=(), daemon=None):

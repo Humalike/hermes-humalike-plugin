@@ -129,7 +129,8 @@ def queue_startup(text: str, on_delivered=None) -> None:
     (adapters aren't connected yet at register() time). ``on_delivered`` fires
     only after the text actually reached at least one home channel — callers
     use it to record "warned" without losing warnings that never got through."""
-    _pending.append((text, on_delivered))
+    with _LOCK:
+        _pending.append((text, on_delivered))
 
 
 def flush_pending() -> None:
@@ -144,7 +145,13 @@ def flush_pending() -> None:
 
 
 async def _deliver_startup(text: str, cb) -> None:
-    if await _send(text) and cb is not None:
+    if not await _send(text):
+        # Not delivered (no gateway/home channel yet, or the send failed) —
+        # re-queue so a later inbound retries, e.g. once /sethome is run.
+        with _LOCK:
+            _pending.append((text, cb))
+        return
+    if cb is not None:
         try:
             cb()
         except Exception:
@@ -180,10 +187,18 @@ async def _send(text: str) -> bool:
             # turn-taking and drop it as an unsolicited draft.
             orig = state.ORIG_SEND.get(type(adp))
             if orig:
-                await orig(adp, str(home.chat_id), text)
+                res = await orig(adp, str(home.chat_id), text)
             else:
-                await adp.send(str(home.chat_id), text)
-            sent_any = True
+                res = await adp.send(str(home.chat_id), text)
+            # Host adapters don't raise on delivery failure — they return
+            # SendResult(success=False) ("Not connected", flood control…), so
+            # "no exception" is NOT "sent". Default True covers adapters that
+            # return nothing.
+            if getattr(res, "success", True):
+                sent_any = True
+            else:
+                _log.warning("notify: alert to %s home not delivered: %s",
+                             platform, getattr(res, "error", "send failed"))
         except Exception as e:
             _log.warning("notify: alert to %s home failed: %s", platform, e)
     if not sent_any:

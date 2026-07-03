@@ -98,10 +98,12 @@ def test_platform_problems_slack():
         probs = _MOD._platform_config_problems({})
         assert any("not a value Hermes accepts" in p for p in probs), probs
         assert any("no user authorized" in p for p in probs), probs
-    # GATEWAY_ALLOWED_USERS counts as authorization (host honors it).
+        assert any("reply_in_thread" in p for p in probs), probs  # not set -> warned
+    # GATEWAY_ALLOWED_USERS counts as authorization (host honors it); with
+    # reply_in_thread: false in yaml there is nothing left to warn about.
     with patch.dict(os.environ, {"SLACK_BOT_TOKEN": "t", "GATEWAY_ALLOWED_USERS": "U1",
                                  "SLACK_REQUIRE_MENTION": "false"}, clear=True):
-        assert _MOD._platform_config_problems({}) == []
+        assert _MOD._platform_config_problems({"slack": {"reply_in_thread": False}}) == []
 
 
 def test_platform_problems_whatsapp():

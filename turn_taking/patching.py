@@ -343,6 +343,8 @@ async def _handle_observed_group(self: Any, event: Any, replay: Callable[[], Any
         state.LOOP = asyncio.get_running_loop()
     except RuntimeError:
         pass
+    state.LAST_ADAPTER = self  # notify.py fallback when no thread ever opened
+    notify.flush_pending()  # observe-only deployments never reach _handle_inbound
     _patch__reply_anchor_for_event(self)
     message_id = str(getattr(event, "message_id", "") or "")
     source = event.source
