@@ -247,8 +247,7 @@ def maybe_autoconfigure() -> None:
     any_fixed = any(kind == "fixed" for kind, _ in body)
     header = ("🔧 Humalike plugin — configured hermes for turn-taking:\n"
               "   DISCLAIMER: this is extra info — no action needed unless a line says so." if any_fixed
-              else "✅ Humalike plugin — turn-taking setup verified:\n"
-                   "   DISCLAIMER: this is extra info — nothing for you to do.")
+              else "✅ Humalike plugin — turn-taking setup verified:")
     lines = [f"   {'• ' if kind == 'fixed' else '✓ '}{label}"
              + (" — already right" if kind == "ok" else "")
              for kind, label in body]
