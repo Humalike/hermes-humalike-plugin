@@ -83,6 +83,29 @@ def api_url() -> str:
     return cfg("HUMALIKE_API_URL", DEFAULT_API).rstrip("/")
 
 
+# ── TUI-safe printing ─────────────────────────────────────────────────────────
+def _show(text: str) -> None:
+    """Print so it survives the hermes TUI. Under a running prompt_toolkit
+    application a bare print() is erased on the next redraw — route through
+    run_in_terminal (hermes cli.py's own idiom), which suspends the prompt,
+    prints above it into scrollback, and resumes. Plain print everywhere else
+    (gateway console, bare terminal, prompt_toolkit not installed)."""
+    try:
+        from prompt_toolkit.application import get_app_or_none, run_in_terminal
+
+        app = get_app_or_none()
+        if app is not None and app.is_running and getattr(app, "loop", None) is not None:
+            import asyncio
+
+            app.loop.call_soon_threadsafe(
+                lambda: asyncio.ensure_future(run_in_terminal(lambda: print(text)))
+            )
+            return
+    except Exception:
+        pass  # fall through to the plain print
+    print(text)
+
+
 # ── Key persistence ───────────────────────────────────────────────────────────
 def write_env_key(path: Path, key: str) -> None:
     """Upsert ``HUMALIKE_API_KEY=…``, preserving every other line. A fresh file
@@ -155,7 +178,7 @@ def run() -> int:
     try:
         session = create_session(bearer)
     except Exception as e:
-        print(f"Could not reach Humalike to start the login ({e}).")
+        _show(f"Could not reach Humalike to start the login ({e}).")
         return 1
 
     uri = session["verification_uri"]
@@ -163,9 +186,9 @@ def run() -> int:
     # print for the terminal AND log for gateway/TUI runs, where a rich UI can
     # swallow a background thread's stdout — the log file keeps the URL findable.
     _log.warning("humalike login: approve at %s (valid ~%d min)", uri, minutes)
-    print("\nOpen this link on any device and approve to connect your Humalike account:\n"
+    _show("\nOpen this link on any device and approve to connect your Humalike account:\n"
           f"\n    {uri}\n"
-          f"\nWaiting for approval (link valid ~{minutes} min, Ctrl-C to abort)…")
+          f"\nWaiting for approval (link valid ~{minutes} min)…")
     try:
         import webbrowser
 
@@ -182,7 +205,7 @@ def run() -> int:
         due = {t for t in reminders if t <= elapsed}
         if due:
             reminders.difference_update(due)
-            print(f"\n⏳ Humalike login still waiting — approve at: {uri}\n")
+            _show(f"\n⏳ Humalike login still waiting — approve at: {uri}\n")
 
     global PENDING_URI
     PENDING_URI = uri
@@ -196,9 +219,11 @@ def run() -> int:
         write_env_key(HERMES_ENV, key)
         os.environ["HUMALIKE_API_KEY"] = key  # live for this process too
         who = (data.get("account") or {}).get("email") or "your account"
-        print(f"✅ Connected as {who} — key saved to {HERMES_ENV}.")
+        _log.warning("humalike login: connected as %s", who)
+        _show(f"\n✅ Connected as {who} — key saved to {HERMES_ENV}.\n")
         return 0
-    print(f"Login {status} — run this script again (or send the bot /connect) to retry.")
+    _log.warning("humalike login: %s", status)
+    _show(f"\nLogin {status} — send the bot /connect (or rerun login.py) to retry.\n")
     return 1
 
 
