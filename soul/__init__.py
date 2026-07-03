@@ -6,7 +6,7 @@ it borrows from the caller is the genuine ``send`` (passed in) so its replies
 bypass the draft-suppression patch.
 
 Backed by the Humalike Personas API:
-  POST {base}/v1/personas/actions/enhance  {persona, grounding} -> {system_prompt, ...}
+  POST {base}/v1/personas/actions/enhance  {persona} -> {system_prompt, ...}
 
 v1 scope: ENHANCE an existing SOUL.md only. Create-from-scratch is a later add.
 """
@@ -32,7 +32,7 @@ ENHANCEMENT_REPO = "/v1/personas/repositories/Enhancement/by-id/{}"
 DEFAULT_API = "https://api.humalike.com"
 
 # Enhance is async server-side: POST returns {id, status:"pending"}, then we poll
-# the repository route until it's "succeeded"/"failed". research grounding can run
+# the repository route until it's "succeeded"/"failed". enhancement can run
 # for minutes — ponytail: fixed ceiling of POLL_MAX*POLL_EVERY ≈ 5 min, then give up.
 POLL_EVERY = 2.0
 POLL_MAX = 150
@@ -67,11 +67,6 @@ def _soul_path() -> Path:
     return Path(p).expanduser() if p else _HERMES_CONFIG.with_name("SOUL.md")
 
 
-def _grounding() -> str:
-    g = os.getenv("HERMES_SOUL_GROUNDING") or str(_cfg().get("soul_grounding") or "off")
-    return g if g in ("off", "web", "research") else "off"
-
-
 # ── SOUL.md parsing ───────────────────────────────────────────────────────────
 def seed_body(raw: str) -> str:
     """The real persona text in a SOUL.md: HTML comments and markdown headings
@@ -91,11 +86,11 @@ def _persona_text(raw: str) -> str:
 
 # ── Enhance API ───────────────────────────────────────────────────────────────
 # Appended to every persona we enhance so the generated system prompt never uses
-# an em-dash (the LLM's tell). Sent in-band since enhance takes only {persona, grounding}.
+# an em-dash (the LLM's tell). Sent in-band since enhance takes only {persona}.
 _NO_EMDASH_DIRECTIVE = "\n\nHARD RULE: never use an em-dash (—) anywhere in this persona."
 
 
-async def enhance(persona_text: str, grounding: str = "off") -> Optional[Dict[str, Any]]:
+async def enhance(persona_text: str) -> Optional[Dict[str, Any]]:
     """Enhance a persona and return the rendered ``persona`` dict (with
     ``system_prompt``/``fields``/``markdown``), or None on any failure (fail-open).
 
@@ -108,7 +103,7 @@ async def enhance(persona_text: str, grounding: str = "off") -> Optional[Dict[st
         async with httpx.AsyncClient(timeout=30.0) as client:
             r = await client.post(
                 base + ENHANCE_PATH,
-                json={"persona": persona_text + _NO_EMDASH_DIRECTIVE, "grounding": grounding},
+                json={"persona": persona_text + _NO_EMDASH_DIRECTIVE},
                 headers=headers,
             )
             r.raise_for_status()
@@ -164,7 +159,7 @@ async def command(raw_args: str) -> str:
         return ("Your SOUL.md has no persona to enhance yet — add a few lines describing your "
                 "agent, then send /soul enhance. (Generating one from scratch is coming soon.)")
 
-    persona = await enhance(_persona_text(raw), _grounding())
+    persona = await enhance(_persona_text(raw))
     enhanced = (persona or {}).get("system_prompt")
     if not enhanced:
         return "⚠️ Couldn't reach the persona service — SOUL.md left unchanged."
@@ -208,7 +203,7 @@ async def _auto_enhance() -> bool:
     if not seed_body(raw):
         _log.info("soul: auto-enhance skipped — %s has no persona seed yet", path)
         return False
-    persona = await enhance(_persona_text(raw), _grounding())
+    persona = await enhance(_persona_text(raw))
     enhanced = (persona or {}).get("system_prompt")
     if not enhanced:
         _log.warning("soul: auto-enhance failed (service unreachable?) — %s left unchanged", path)

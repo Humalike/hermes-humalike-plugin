@@ -47,14 +47,6 @@ def test_persona_text_drops_comments_keeps_heading():
     assert "Hermes Agent Persona" in sent  # heading kept (only the seed check strips it)
 
 
-def test_grounding_validates():
-    os.environ["HERMES_SOUL_GROUNDING"] = "nonsense"
-    assert soul._grounding() == "off"
-    os.environ["HERMES_SOUL_GROUNDING"] = "research"
-    assert soul._grounding() == "research"
-    del os.environ["HERMES_SOUL_GROUNDING"]
-
-
 def test_auto_enhance_default_on_and_disableable():
     os.environ.pop("HERMES_SOUL_AUTO_ENHANCE", None)
     assert soul._auto_enabled() is True  # default on (no config in test env)

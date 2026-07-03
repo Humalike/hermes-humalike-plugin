@@ -67,7 +67,6 @@ slack:
 
 turn_taking:
   soul_path: "<the SOUL.md path found above>"
-  soul_grounding: "off"    # off | web | research — real-world research on enhance
   soul_auto_enhance: true  # one-shot persona enhance on first startup
 ```
 

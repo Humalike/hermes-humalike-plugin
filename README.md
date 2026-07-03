@@ -52,36 +52,55 @@ the API key comes from a device login the plugin runs for you:
 - **From chat**: send the bot `/connect`. Same flow, and the key goes live
   without a restart.
 
-The first start also configures hermes itself: the required chat settings
-(streaming off, one shared thread per group, tool chatter hidden) and — when
-WhatsApp or Slack is connected — the respond-to-everyone group settings.
-Telegram's two manual steps (BotFather privacy mode, group ids) are prompted
-on the console. Restart once after that first boot to apply.
+### Configured for you on the first start
 
-Already have a key, or need a different environment? `~/.hermes/.env`
-overrides (`Authorization: Bearer`):
+Everything turn-taking needs is applied automatically the first time the plugin
+runs — it writes these settings itself and prints exactly what it changed. You
+don't set any of them by hand; they're listed here so you know what and why:
+
+| Setting (file) | Set to | Why |
+|---|---|---|
+| `streaming` (config.yaml) | `false` | the plugin rewrites the final reply into human-style messages, so Hermes must not also stream its own raw draft over the top |
+| `group_sessions_per_user` (config.yaml) | `false` | everyone in a group shares one conversation, so the bot follows the whole room instead of a separate thread per person |
+| `display.tool_progress` (config.yaml) | `off` | hides "Browsing…/Clicking…" tool chatter so replies read as human |
+| `slack.reply_in_thread` (config.yaml, only if Slack is connected) | `false` | one shared conversation per channel; the default starts a fresh thread + session for **every** message, so the bot would answer each one separately |
+| `WHATSAPP_*` / `SLACK_*` respond-to-everyone (`.env`, only for a connected platform) | open | reply to everyone in DMs and groups without needing an @mention |
+
+**Restart the gateway once after this first boot** so the new values load — the
+plugin's report ends with that reminder.
+
+### Action required — the few things it can't do for you
+
+- **Persona file location** — the plugin reads your persona from
+  `~/.hermes/SOUL.md`. If yours lives somewhere else (e.g. a Docker mount),
+  point it there in `~/.hermes/config.yaml`:
+  ```yaml
+  turn_taking:
+    soul_path: "/path/to/SOUL.md"
+  ```
+- **Telegram groups** — two steps that genuinely can't be automated: disable
+  privacy mode in @BotFather, and add the group's chat id to
+  `TELEGRAM_GROUP_ALLOWED_CHATS`. The plugin prints both when Telegram is in use.
+- **A personal WhatsApp number** — the respond-to-everyone setting means the bot
+  replies to *everyone* who messages that number, in DMs and all groups. If it's
+  your personal number, tighten it (the plugin warns about this at setup):
+  `WHATSAPP_ALLOW_ALL_USERS=false` and/or `WHATSAPP_GROUP_POLICY=allowlist`.
+
+### Overrides
+
+`~/.hermes/.env` (`Authorization: Bearer`):
 
 ```bash
-HUMALIKE_API_KEY=your-api-key   # skips the login
+HUMALIKE_API_KEY=your-api-key   # skips the device login
 HUMALIKE_API_URL=…              # non-default environment; set EMPTY to disable turn-taking
 ```
 
-`~/.hermes/config.yaml` — all required:
+Optional persona knob in `~/.hermes/config.yaml` under `turn_taking:` —
+`soul_auto_enhance` (`true` by default: the one-shot persona pass on first
+startup; set `false` to skip it).
 
-```yaml
-streaming: false                # the plugin replaces the final reply text
-group_sessions_per_user: false  # one thread per group chat
-display:
-  tool_progress: "off"          # hide tool-call chatter (Browsing/Clicking/…) so replies read as human
-
-turn_taking:
-  soul_path: "~/.hermes/SOUL.md"  # where your SOUL.md actually lives — adjust if elsewhere (e.g. a Docker mount)
-  soul_grounding: "off"           # off | web | research — real-world research when enhancing the persona
-  soul_auto_enhance: true         # one-shot persona enhance on first startup
-```
-
-Restart the gateway and message the bot — it now reads the room and replies
-when it has something to say. Done.
+That's it — restart the gateway and message the bot. It now reads the room and
+replies when it has something to say.
 
 ## Platforms
 
