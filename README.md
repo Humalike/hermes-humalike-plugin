@@ -29,6 +29,15 @@ your bot feel like a person in the chat, powered by the
 
 ## Install
 
+First update Hermes to the latest version - the plugin patches into Hermes
+internals, so an out-of-date Hermes can leave turn-taking silently unhooked:
+
+```bash
+hermes update
+```
+
+Then clone and enable:
+
 ```bash
 git clone https://github.com/Humalike/hermes-humalike-plugin ~/.hermes/plugins/humalike
 
