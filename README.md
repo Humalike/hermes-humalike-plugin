@@ -57,15 +57,13 @@ actually starts. Use whatever command runs your bot - `hermes`, or your gateway
 start command.)
 
 No env setup needed: the API URL defaults to `https://api.humalike.com`, and
-the API key comes from a device login the plugin runs for you:
+the key is handled for you. When you start Hermes, the plugin applies its
+configuration and prints a login URL on the console (and opens a browser tab
+when the machine has one). Open it on any device - your phone works - approve,
+and the key is saved to `~/.hermes/.env`.
 
-- **Automatic**: the first start without a key prints a login link on the
-  console (and opens a browser tab when the machine has one). Approve it on
-  any device - your phone works - and the key is saved to `~/.hermes/.env`.
-- **At install time**: `python3 ~/.hermes/plugins/humalike/login.py` - the
-  same flow in the terminal (stdlib-only, no Hermes venv needed).
-- **From chat**: send the bot `/connect`. Same flow, and the key goes live
-  without a restart.
+You can also send the bot `/connect` at any time to link an account from chat;
+the key goes live without a restart.
 
 ### Configured for you on the first start
 
