@@ -29,10 +29,6 @@ your bot feel like a person in the chat, powered by the
 
 ## Install
 
-> Using an agent harness (Claude Code, etc.)? Point it at
-> [`skills/install-turn-taking/SKILL.md`](skills/install-turn-taking/SKILL.md)
-> and it can do all of the below for you.
-
 ```bash
 git clone https://github.com/Humalike/hermes-humalike-plugin ~/.hermes/plugins/humalike
 
