@@ -1,4 +1,4 @@
-name: turn-taking
+name: humalike
 version: 0.1.0
 description: "Decides when the agent should speak (stays silent otherwise) and naturalizes each reply into 1-5 chat messages via the external turn-taking service. v1 joins the messages into one bubble (no pacing)."
 author: humalike

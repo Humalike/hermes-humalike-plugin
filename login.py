@@ -4,7 +4,7 @@
 Run it right after installing the plugin (stdlib only — no Hermes venv, no
 httpx):
 
-    python3 ~/.hermes/plugins/turn-taking/login.py
+    python3 ~/.hermes/plugins/humalike/login.py
 
 Prints the approval URL (and opens a browser tab when the machine has one — on
 SSH/headless boxes open the printed link on your phone), polls until the link

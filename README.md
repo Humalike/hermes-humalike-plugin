@@ -34,11 +34,11 @@ your bot feel like a person in the chat, powered by the
 > and it can do all of the below for you.
 
 ```bash
-git clone https://github.com/Humalike/hermes-humalike-plugin ~/.hermes/plugins/turn-taking
+git clone https://github.com/Humalike/hermes-humalike-plugin ~/.hermes/plugins/humalike
 
 # run `hermes` from your Hermes install — activate its virtualenv first
 # (or call the hermes CLI by its full path)
-hermes plugins enable turn-taking
+hermes plugins enable humalike
 ```
 
 `~/.hermes/.env` — one URL + one key for all Humalike calls
@@ -54,7 +54,7 @@ No key yet? Two ways to link your Humalike account — no copy-pasting keys:
 - **At install time, in the terminal** (stdlib-only, no Hermes venv needed):
 
   ```bash
-  python3 ~/.hermes/plugins/turn-taking/login.py
+  python3 ~/.hermes/plugins/humalike/login.py
   ```
 
   Prints the approval link, opens a browser tab when the machine has one

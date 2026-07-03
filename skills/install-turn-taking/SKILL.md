@@ -17,11 +17,11 @@ sending the bot `/connect` (a login link, approved in any browser).
 ## 1. Clone and enable
 
 ```bash
-git clone https://github.com/Humalike/hermes-humalike-plugin ~/.hermes/plugins/turn-taking
+git clone https://github.com/Humalike/hermes-humalike-plugin ~/.hermes/plugins/humalike
 
 # `hermes` must be the Hermes CLI from its install — activate the Hermes
 # virtualenv first (or call the hermes CLI by its full path)
-hermes plugins enable turn-taking
+hermes plugins enable humalike
 ```
 
 ## 2. Env vars
@@ -39,7 +39,7 @@ HUMALIKE_CLI_GATEWAY_KEY=…      # only for the login/connect flow — the plug
 No API key? Run the device login right now, in the terminal:
 
 ```bash
-python3 ~/.hermes/plugins/turn-taking/login.py
+python3 ~/.hermes/plugins/humalike/login.py
 ```
 
 It prints the approval URL and opens a browser tab when the install machine
