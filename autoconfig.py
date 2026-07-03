@@ -259,8 +259,8 @@ def maybe_autoconfigure() -> None:
         # Closing footer, last line of the whole report: the host reads these
         # settings at startup, so a change made during THIS boot only takes
         # effect on the next one — restart once more after the setup finishes.
-        parts.append("↻ Restart the hermes gateway once more after this setup to load the "
-                     "updated configuration.")
+        parts.append("↻ ACTION REQUIRED — restart the hermes gateway once more after this "
+                     "setup to load the updated configuration.")
     report = "\n\n" + "\n\n".join(parts) + "\n"
 
     def _announce() -> None:
