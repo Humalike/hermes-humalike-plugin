@@ -217,7 +217,8 @@ def run(wait_for_tui: bool = False) -> int:
         pass
     if wait_for_tui:
         _wait_for_tui()
-    _show("\nOpen this link on any device and approve to connect your Humalike account:\n"
+    _show("\n🔗 Humalike plugin — one step left: connect your account.\n"
+          "   Open this link on any device (your phone works) and approve:\n"
           f"\n    {uri}\n"
           f"\nWaiting for approval (link valid ~{minutes} min)…\n")
 
