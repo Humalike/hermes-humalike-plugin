@@ -37,6 +37,18 @@ Channel IDs: gateway logs after a message from that channel, or the Slack URL
 (`.../C0123456789/...`). config.yaml equivalents: `require_mention: false` /
 `free_response_channels: [...]` under `slack:`.
 
+**Gate C — one conversation per channel (REQUIRED for turn-taking)** — in
+`~/.hermes/config.yaml`:
+```yaml
+slack:
+  reply_in_thread: false
+```
+With the default (`true`), every top-level channel message becomes its own
+synthetic thread AND its own session — the bot answers each message separately
+in a separate thread and turn-taking can never coalesce the conversation. With
+`false` the whole channel shares one session and the bot replies once, to the
+latest message (replies inside existing threads stay threaded).
+
 Fully open = `SLACK_ALLOW_ALL_USERS=true` + `SLACK_REQUIRE_MENTION=false` —
 weigh the fail-open caveat before doing this on a busy/public workspace.
 If disabling mentions globally, consider `SLACK_ALLOWED_CHANNELS=<ids>` so the

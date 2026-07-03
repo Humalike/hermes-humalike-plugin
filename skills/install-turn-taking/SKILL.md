@@ -62,6 +62,8 @@ streaming: false
 group_sessions_per_user: false
 display:
   tool_progress: "off"   # hide tool-call chatter (Browsing/Clicking/…) so replies read as human
+slack:
+  reply_in_thread: false # only if Slack is used — one shared conversation per channel
 
 turn_taking:
   soul_path: "<the SOUL.md path found above>"

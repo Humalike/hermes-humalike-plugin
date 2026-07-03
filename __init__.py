@@ -113,6 +113,12 @@ def _platform_config_problems(cfg) -> list:
         if mention not in _FALSE and not free:
             out.append("Slack: the bot only replies when @mentioned in channels. Set "
                        "SLACK_REQUIRE_MENTION=false (or SLACK_FREE_RESPONSE_CHANNELS) to answer unmentioned messages.")
+        rit = next((sec.get("reply_in_thread") for sec in _sections(cfg, "slack")
+                    if "reply_in_thread" in sec), None)
+        if rit is None or str(rit).strip().lower() not in _FALSE:
+            out.append("Slack: reply_in_thread is not false — every top-level channel message "
+                       "becomes its own thread AND its own session, so turn-taking answers each "
+                       "message separately. Set 'slack:\n  reply_in_thread: false' in ~/.hermes/config.yaml.")
 
     # ── WhatsApp (in use only when the host would enable it: WHATSAPP_ENABLED
     # truthy — WHATSAPP_ENABLED=false or WHATSAPP_CLOUD_* alone don't count) ──

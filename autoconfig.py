@@ -91,15 +91,22 @@ def plan(cfg: dict, env: dict, done: set) -> tuple[dict, dict, list, list, list]
         if any(k.startswith("WHATSAPP") for k in env_updates):
             notes.append("WhatsApp — respond to everyone, in every group, no @mention")
 
-    # ── Slack: respond to everyone (same only-if-unset rule) ──
+    # ── Slack: respond to everyone (same only-if-unset rule), plus the one
+    # config.yaml key turn-taking REQUIRES there: reply_in_thread: false —
+    # the default trues it, making every top-level channel message its own
+    # thread AND session, so turn-taking can never coalesce a conversation. ──
     if "slack" not in done and (env.get("SLACK_BOT_TOKEN") or env.get("SLACK_APP_TOKEN")):
         for key, value in (("SLACK_ALLOW_ALL_USERS", "true"),
                            ("SLACK_REQUIRE_MENTION", "false")):
             if not env.get(key):
                 env_updates[key] = value
+        slack_cfg = cfg.get("slack") if isinstance(cfg.get("slack"), dict) else {}
+        if slack_cfg.get("reply_in_thread") is not False:
+            config_updates["slack"] = {**slack_cfg, "reply_in_thread": False}
         sections.append("slack")
-        if any(k.startswith("SLACK") for k in env_updates):
-            notes.append("Slack — respond to everyone, no @mention needed")
+        if any(k.startswith("SLACK") for k in env_updates) or "slack" in config_updates:
+            notes.append("Slack — respond to everyone, no @mention, one shared "
+                         "conversation per channel (reply_in_thread off)")
 
     # ── Telegram: prompt-only (once) ──
     if "telegram" not in done and env.get("TELEGRAM_BOT_TOKEN"):

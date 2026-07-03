@@ -83,12 +83,24 @@ def test_whatsapp_not_enabled_or_done_is_skipped():
     assert not env_updates and not sections
 
 
-def test_slack_fills_only_unset_keys():
-    _, env_updates, _, _, sections = _plan(
+def test_slack_fills_only_unset_keys_and_forces_reply_in_thread_off():
+    config_updates, env_updates, _, _, sections = _plan(
         done={"core"},
         env={"SLACK_APP_TOKEN": "xapp-1", "SLACK_ALLOW_ALL_USERS": "true"})
     assert env_updates == {"SLACK_REQUIRE_MENTION": "false"}, env_updates
+    assert config_updates == {"slack": {"reply_in_thread": False}}, config_updates
     assert "slack" in sections
+
+
+def test_slack_reply_in_thread_already_off_and_merge_preserves_keys():
+    config_updates, _, _, _, _ = _plan(
+        done={"core"}, cfg={"slack": {"reply_in_thread": False}},
+        env={"SLACK_BOT_TOKEN": "xoxb-1"})
+    assert "slack" not in config_updates
+    config_updates, _, _, _, _ = _plan(
+        done={"core"}, cfg={"slack": {"require_mention": False}},
+        env={"SLACK_BOT_TOKEN": "xoxb-1"})
+    assert config_updates["slack"] == {"require_mention": False, "reply_in_thread": False}
 
 
 def test_telegram_is_prompt_only():
