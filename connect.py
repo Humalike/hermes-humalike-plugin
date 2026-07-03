@@ -121,8 +121,8 @@ async def command(raw_args: str) -> str:
              f"{tail} "
              "(Anyone who opens it can link their own account, so prefer a DM in a busy group.)")
     if not _config.service_url():
-        reply += ("\n\nHeads-up: HUMALIKE_API_URL isn't set, so after approving you still need to add "
-                  f"HUMALIKE_API_URL={_DEFAULT_API} to {_ENV_FILE} and restart the gateway.")
+        reply += ("\n\nHeads-up: turn-taking is explicitly disabled (HUMALIKE_API_URL is set empty) — "
+                  "remove that override and restart the gateway to activate it after approving.")
     return reply
 
 
@@ -159,8 +159,8 @@ def _done_message(data: dict) -> str:
     who = (data.get("account") or {}).get("email") or "your account"
     if _config.service_url():
         return f"✅ Connected as {who} — key saved, turn-taking is active."
-    return (f"✅ Connected as {who} — key saved to {_ENV_FILE}. Now set HUMALIKE_API_URL there "
-            "and restart the gateway to activate turn-taking.")
+    return (f"✅ Connected as {who} — key saved to {_ENV_FILE}. Turn-taking stays disabled while "
+            "HUMALIKE_API_URL is set empty — remove that override and restart to activate it.")
 
 
 # ── Key persistence ────────────────────────────────────────────────────────────

@@ -178,8 +178,8 @@ def _warn_misconfig() -> None:
     """
     problems = []
     if not _config.service_url():
-        problems.append("HUMALIKE_API_URL is not set — turn-taking is DISABLED "
-                        "(/soul still works). Add it to ~/.hermes/.env.")
+        problems.append("HUMALIKE_API_URL is set empty — turn-taking is explicitly "
+                        "DISABLED (/soul still works).")
     elif not _config.api_key():
         problems.append("HUMALIKE_API_KEY is not set — every Humalike call will "
                         "fail with 401. Send the bot /connect to link your "
@@ -216,10 +216,10 @@ def _warn_misconfig() -> None:
 def register(ctx) -> None:
     """Plugin entry point: activate the send + inbound patches.
 
-    Idle (no patching) when turn-taking isn't configured, so the plugin is a
-    no-op unless ``HUMALIKE_API_URL`` is set — but the ``/soul`` persona
-    command is registered regardless (it uses the separate Personas API, not
-    the turn-taking service).
+    Idle (no patching) only when turn-taking is explicitly disabled
+    (``HUMALIKE_API_URL`` set EMPTY — the URL defaults to the public API
+    otherwise) — the ``/soul`` persona command is registered regardless (it
+    uses the separate Personas API, not the turn-taking service).
     """
     _warn_misconfig()
     try:

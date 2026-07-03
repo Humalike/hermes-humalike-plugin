@@ -41,33 +41,24 @@ git clone https://github.com/Humalike/hermes-humalike-plugin ~/.hermes/plugins/h
 hermes plugins enable humalike
 ```
 
-`~/.hermes/.env` — one URL + one key for all Humalike calls
-(`Authorization: Bearer`):
+No env setup needed: the API URL defaults to `https://api.humalike.com`, and
+the API key comes from a device login the plugin runs for you:
 
-```bash
-HUMALIKE_API_URL=https://api.humalike.com
-HUMALIKE_API_KEY=your-api-key   # or skip and use /connect (below)
-```
-
-No key yet? Two ways to link your Humalike account — no copy-pasting keys:
-
-- **At install time, in the terminal** (stdlib-only, no Hermes venv needed):
-
-  ```bash
-  python3 ~/.hermes/plugins/humalike/login.py
-  ```
-
-  Prints the approval link, opens a browser tab when the machine has one
-  (on SSH/headless boxes open the printed link on your phone), and writes
-  the key to `~/.hermes/.env`. The first gateway start also pops this login
-  automatically if the key is still missing.
-
+- **Automatic**: the first start without a key prints a login link on the
+  console (and opens a browser tab when the machine has one). Approve it on
+  any device — your phone works — and the key is saved to `~/.hermes/.env`.
+- **At install time**: `python3 ~/.hermes/plugins/humalike/login.py` — the
+  same flow in the terminal (stdlib-only, no Hermes venv needed).
 - **From chat**: send the bot `/connect`. Same flow, and the key goes live
   without a restart.
 
-Both authenticate their setup calls with the plugin's public client
-identifier — until a default ships baked in, also set
-`HUMALIKE_CLI_GATEWAY_KEY` in `~/.hermes/.env` (value in the Humalike docs).
+Already have a key, or need a different environment? `~/.hermes/.env`
+overrides (`Authorization: Bearer`):
+
+```bash
+HUMALIKE_API_KEY=your-api-key   # skips the login
+HUMALIKE_API_URL=…              # non-default environment; set EMPTY to disable turn-taking
+```
 
 `~/.hermes/config.yaml` — all required:
 

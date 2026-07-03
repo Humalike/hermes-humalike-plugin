@@ -116,6 +116,12 @@ def test_cfg_env_wins_over_file():
         _clean_env()
 
 
+def test_gateway_key_has_baked_default():
+    """Zero-config: a fresh install must carry the public client identifier."""
+    _clean_env()
+    assert login.gateway_key().startswith("hcg_")
+
+
 # ── login.run: terminal short-circuits (no HTTP reached) ─────────────────────
 def test_run_already_connected_is_success():
     _clean_env()
@@ -128,7 +134,11 @@ def test_run_already_connected_is_success():
 
 def test_run_without_gateway_key_fails_with_manual_hint():
     _clean_env()
-    assert login.run() == 1
+    orig, login.GATEWAY_KEY_DEFAULT = login.GATEWAY_KEY_DEFAULT, ""
+    try:
+        assert login.run() == 1
+    finally:
+        login.GATEWAY_KEY_DEFAULT = orig
 
 
 # ── login.maybe_first_boot_login: the once-marker and the thread ─────────────
@@ -160,8 +170,12 @@ def test_first_boot_login_fires_once():
 def test_first_boot_login_skipped_when_connected_or_unconfigured():
     _clean_env()
     login._MARKER.unlink(missing_ok=True)
-    login.maybe_first_boot_login()  # no gateway key → no-op
-    assert not login._MARKER.exists()
+    orig, login.GATEWAY_KEY_DEFAULT = login.GATEWAY_KEY_DEFAULT, ""
+    try:
+        login.maybe_first_boot_login()  # no gateway key → no-op
+        assert not login._MARKER.exists()
+    finally:
+        login.GATEWAY_KEY_DEFAULT = orig
     os.environ.update(HUMALIKE_CLI_GATEWAY_KEY="gk", HUMALIKE_API_KEY="ak_x")
     try:
         login.maybe_first_boot_login()  # already connected → no-op
@@ -183,7 +197,11 @@ def test_command_already_connected():
 
 def test_command_without_gateway_key_points_to_manual_setup():
     _clean_env()
-    reply = asyncio.run(connect.command(""))
+    orig, login.GATEWAY_KEY_DEFAULT = login.GATEWAY_KEY_DEFAULT, ""
+    try:
+        reply = asyncio.run(connect.command(""))
+    finally:
+        login.GATEWAY_KEY_DEFAULT = orig
     assert "HUMALIKE_API_KEY" in reply, reply  # manual fallback instructions
 
 
@@ -220,14 +238,15 @@ def test_result_messages_offer_retry():
 
 def test_done_message_names_account_and_depends_on_url():
     _clean_env()
-    os.environ["HUMALIKE_API_URL"] = "https://api.humalike.com"
     try:
+        # URL defaults now → active without any env setup
         m = connect._done_message({"account": {"email": "maks@example.com"}})
         assert "maks@example.com" in m and "active" in m
+        os.environ["HUMALIKE_API_URL"] = ""  # explicit opt-out
+        m = connect._done_message({})
+        assert "your account" in m and "HUMALIKE_API_URL" in m
     finally:
         _clean_env()
-    m = connect._done_message({})  # no URL configured, no email returned
-    assert "your account" in m and "HUMALIKE_API_URL" in m
 
 
 if __name__ == "__main__":

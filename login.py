@@ -23,6 +23,7 @@ the installer writes the gateway key to the file before any shell exports it.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import platform
 import socket
@@ -32,6 +33,8 @@ import time
 import urllib.request
 from pathlib import Path
 
+_log = logging.getLogger(__name__)
+
 HERMES_ENV = Path.home() / ".hermes" / ".env"
 DEFAULT_API = "https://api.humalike.com"
 CREATE = "/v1/keys/actions/cli_create"
@@ -40,10 +43,9 @@ POLL = "/v1/keys/actions/cli_poll"
 # RFC 8628 public client identifier for the CLI lane: it names the client (a
 # Hermes plugin install) to the API and unlocks ONLY cli_create/cli_poll — the
 # per-session device_code stays the sole credential that can claim a key, so
-# this ships in the open like any OAuth public client_id.
-# ponytail: no baked default yet — set HUMALIKE_CLI_GATEWAY_KEY until the
-# published identifier lands here in a follow-up.
-GATEWAY_KEY_DEFAULT = ""
+# this ships in the open like any OAuth public client_id. Override with
+# HUMALIKE_CLI_GATEWAY_KEY (e.g. for staging).
+GATEWAY_KEY_DEFAULT = "hcg_360rQLmr4iabWKiEqc5ZFXY5sUM8g-wTjFO3cwNgTlI"
 
 _MARKER = Path.home() / ".hermes" / ".turn_taking_login_prompted"
 
@@ -146,6 +148,9 @@ def run() -> int:
 
     uri = session["verification_uri"]
     minutes = max(1, int(session.get("expires_in", 600)) // 60)
+    # print for the terminal AND log for gateway/TUI runs, where a rich UI can
+    # swallow a background thread's stdout — the log file keeps the URL findable.
+    _log.warning("humalike login: approve at %s (valid ~%d min)", uri, minutes)
     print("\nOpen this link on any device and approve to connect your Humalike account:\n"
           f"\n    {uri}\n"
           f"\nWaiting for approval (link valid ~{minutes} min, Ctrl-C to abort)…")
@@ -178,7 +183,13 @@ def maybe_first_boot_login() -> None:
     Marker written when the prompt FIRES, not on success — an ignored tab must
     not reopen on every boot. Retry paths: delete the marker, rerun login.py,
     or send /connect."""
-    if cfg("HUMALIKE_API_KEY") or not gateway_key() or _MARKER.exists():
+    if cfg("HUMALIKE_API_KEY"):
+        return  # already connected
+    if not gateway_key():
+        _log.info("humalike login: skipped — no client identifier configured")
+        return
+    if _MARKER.exists():
+        _log.info("humalike login: already prompted once (delete %s to retry, or send /connect)", _MARKER)
         return
     try:
         _MARKER.parent.mkdir(parents=True, exist_ok=True)
