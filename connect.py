@@ -27,35 +27,25 @@ draft-suppression patch can't swallow it.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 import platform
 import socket
 import threading
-import time
-from pathlib import Path
-from typing import Any, Optional, Tuple
+from typing import Any, Tuple
 
 import httpx
 
-from . import _config
+from . import _config, login
 from .turn_taking import notify, state
 
 _log = logging.getLogger(__name__)
 
-_ENV_FILE = Path.home() / ".hermes" / ".env"
-_DEFAULT_API = "https://api.humalike.com"
-_CREATE = "/v1/keys/actions/cli_create"
-_POLL = "/v1/keys/actions/cli_poll"
-
-# RFC 8628 public client identifier for the CLI lane: it names the client (a
-# Hermes plugin install) to the API and unlocks ONLY cli_create/cli_poll — the
-# per-session device_code stays the sole credential that can claim a key, so
-# this ships in the open like any OAuth public client_id.
-# ponytail: no baked default yet — set HUMALIKE_CLI_GATEWAY_KEY until the
-# published identifier lands here in a follow-up.
-_GATEWAY_KEY_DEFAULT = ""
+# Shared with login.py (the terminal/install-time flow): API paths, the .env
+# location, and the public client identifier all live there.
+_ENV_FILE = login.HERMES_ENV
+_DEFAULT_API = login.DEFAULT_API
+_CREATE = login.CREATE
 
 _PENDING = threading.Event()  # one in-flight link at a time (cleared by _watch)
 
@@ -67,7 +57,7 @@ def _api_url() -> str:
 
 
 def _gateway_key() -> str:
-    return os.getenv("HUMALIKE_CLI_GATEWAY_KEY") or _GATEWAY_KEY_DEFAULT
+    return login.gateway_key()  # env first, then ~/.hermes/.env (the installer writes it there)
 
 
 def _headers() -> dict:
@@ -138,47 +128,25 @@ async def command(raw_args: str) -> str:
 
 # ── Background poll ────────────────────────────────────────────────────────────
 def _watch(route: Tuple[Any, str], session: dict) -> None:
-    """Poll until approved/denied/expired, then confirm in the /connect chat.
-
-    Own thread + own loop (soul's auto-enhance idiom) so neither the command
-    reply nor the gateway loop ever blocks on the ~10-minute approval window.
-    """
+    """Poll until approved/denied/expired (login.poll_session — sync stdlib,
+    fine on this daemon thread), then confirm in the /connect chat. Neither the
+    command reply nor the gateway loop ever blocks on the ~10-minute window."""
+    message = None
     try:
-        message = asyncio.run(_poll(session))
+        data = login.poll_session(session, _gateway_key())
+        status = data.get("status")
+        if status == "authorized":
+            _save_key(data.get("api_key") or "")
+            message = _done_message(data)
+        else:
+            message = _result_message(status)
     except Exception as e:  # never let the watcher die silently
         _log.warning("connect: poll loop errored: %s", e)
-        message = None
     finally:
         _PENDING.clear()
     if message:
         _log.info("connect: %s", message)  # headless installs read the outcome here
         _deliver(route, message)
-
-
-async def _poll(session: dict) -> Optional[str]:
-    interval = max(1, int(session.get("interval", 3)))
-    deadline = time.monotonic() + int(session.get("expires_in", 600))
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        while time.monotonic() < deadline:
-            await asyncio.sleep(interval)
-            try:
-                r = await client.post(
-                    _api_url() + _POLL,
-                    json={"device_code": session["device_code"]},
-                    headers=_headers(),
-                )
-                r.raise_for_status()
-                data = r.json()
-            except Exception:
-                continue  # transient by contract — the session TTL is the deadline
-            status = data.get("status")
-            if status == "authorized":
-                _save_key(data.get("api_key") or "")
-                return _done_message(data)
-            if status in ("denied", "expired"):
-                return _result_message(status)
-            # pending (or an unknown future status) → keep polling until TTL
-    return _result_message("expired")
 
 
 def _result_message(status: str) -> str:
@@ -201,25 +169,9 @@ def _save_key(key: str) -> None:
     turn-taking activates with no restart) and durable for the next one."""
     os.environ["HUMALIKE_API_KEY"] = key
     try:
-        _write_env(_ENV_FILE, key)
+        login.write_env_key(_ENV_FILE, key)
     except Exception as e:
         _log.warning("connect: could not write %s (%s) — key active until restart only", _ENV_FILE, e)
-
-
-def _write_env(path: Path, key: str) -> None:
-    """Upsert ``HUMALIKE_API_KEY=…``, preserving every other line. A fresh file
-    is created 0600 from the first byte (no world-readable window)."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    lines = path.read_text().splitlines() if path.exists() else []
-    lines = [ln for ln in lines if not ln.startswith("HUMALIKE_API_KEY=")]
-    lines.append(f"HUMALIKE_API_KEY={key}")
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as fh:
-        fh.write("\n".join(lines) + "\n")
-    try:
-        path.chmod(0o600)  # a pre-existing file keeps its old mode otherwise
-    except Exception:
-        pass
 
 
 # ── Outcome delivery ───────────────────────────────────────────────────────────

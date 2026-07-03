@@ -49,13 +49,23 @@ HUMALIKE_API_URL=https://api.humalike.com
 HUMALIKE_API_KEY=your-api-key   # or skip and use /connect (below)
 ```
 
-No key yet? Leave `HUMALIKE_API_KEY` unset, start the gateway, and send the
-bot `/connect` from any chat. It replies with a login link; approve it in a
-browser on any device (your phone works — nothing needs to open on the gateway
-box, so SSH/VM/Docker installs are fine) and the key is saved to
-`~/.hermes/.env` and goes live without a restart.
+No key yet? Two ways to link your Humalike account — no copy-pasting keys:
 
-`/connect` authenticates its setup calls with the plugin's public client
+- **At install time, in the terminal** (stdlib-only, no Hermes venv needed):
+
+  ```bash
+  python3 ~/.hermes/plugins/turn-taking/login.py
+  ```
+
+  Prints the approval link, opens a browser tab when the machine has one
+  (on SSH/headless boxes open the printed link on your phone), and writes
+  the key to `~/.hermes/.env`. The first gateway start also pops this login
+  automatically if the key is still missing.
+
+- **From chat**: send the bot `/connect`. Same flow, and the key goes live
+  without a restart.
+
+Both authenticate their setup calls with the plugin's public client
 identifier — until a default ships baked in, also set
 `HUMALIKE_CLI_GATEWAY_KEY` in `~/.hermes/.env` (value in the Humalike docs).
 

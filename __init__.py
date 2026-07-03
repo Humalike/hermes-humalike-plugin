@@ -19,7 +19,7 @@ import logging
 import os
 from pathlib import Path
 
-from . import _config, connect, social_learning, soul
+from . import _config, connect, login, social_learning, soul
 from .turn_taking.hooks import on_transform_llm_output
 from .turn_taking.patching import (
     _patch__enqueue_text_event,
@@ -222,6 +222,13 @@ def register(ctx) -> None:
     the turn-taking service).
     """
     _warn_misconfig()
+    try:
+        # First keyless boot: pop the device-auth login once (browser tab on a
+        # desktop, printed URL on the gateway console otherwise) so a fresh
+        # install connects immediately. /connect and login.py are the retries.
+        login.maybe_first_boot_login()
+    except Exception as e:
+        _log.warning("turn-taking: first-boot login skipped: %s", e)
     try:
         ctx.register_command(
             "soul", soul.command,

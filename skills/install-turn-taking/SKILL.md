@@ -31,10 +31,22 @@ Humalike calls, sent as `Authorization: Bearer`:
 
 ```bash
 HUMALIKE_API_URL=https://api.humalike.com
-HUMALIKE_API_KEY=your-api-key   # ask — omit if the user will link via /connect
-HUMALIKE_CLI_GATEWAY_KEY=…      # only for the /connect flow — the plugin's
+HUMALIKE_API_KEY=your-api-key   # ask — omit if the user will link via login.py or /connect
+HUMALIKE_CLI_GATEWAY_KEY=…      # only for the login/connect flow — the plugin's
                                 # public client id (see the Humalike docs)
 ```
+
+No API key? Run the device login right now, in the terminal:
+
+```bash
+python3 ~/.hermes/plugins/turn-taking/login.py
+```
+
+It prints the approval URL and opens a browser tab when the install machine
+has one; the user approves on any device (phone works) and the key lands in
+`.env` before first boot. Requires `HUMALIKE_CLI_GATEWAY_KEY` above. If you
+skip this, the first gateway start pops the same login automatically, and
+`/connect` in chat (step 4) is the fallback.
 
 ## 3. Required config
 
