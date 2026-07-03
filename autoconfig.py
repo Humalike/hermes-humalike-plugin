@@ -174,16 +174,25 @@ def maybe_autoconfigure() -> None:
 
     for note in notes:
         _log.warning("turn-taking: autoconfigured %s", note)
-    if not notes and not todos:
-        return
 
-    parts = []
-    if notes:
-        parts.append("🔧 Humalike plugin — configured hermes for turn-taking:\n"
-                     + "\n".join(f"   • {n}" for n in notes)
-                     + "\n   Restart hermes once to apply.")
-    parts.extend(todos)
-    report = "\n\n" + "\n\n".join(parts) + "\n"
+    if notes or todos:
+        parts = []
+        if notes:
+            parts.append("🔧 Humalike plugin — configured hermes for turn-taking:\n"
+                         + "\n".join(f"   • {n}" for n in notes)
+                         + "\n   Restart hermes once to apply.")
+        parts.extend(todos)
+        report = "\n\n" + "\n\n".join(parts) + "\n"
+    else:
+        # Nothing needed changing — still confirm ONCE (a sweep only runs when
+        # the marker was missing): a fresh or re-armed install should get
+        # positive confirmation, not silence that reads as failure.
+        names = {"core": "chat settings", "whatsapp": "WhatsApp", "slack": "Slack",
+                 "telegram": "Telegram"}
+        checked = ", ".join(names.get(s, s) for s in sections)
+        report = (f"\n✅ Humalike plugin — hermes is already configured for "
+                  f"turn-taking (checked: {checked}).\n")
+        _log.info("turn-taking: autoconfig verified — nothing to change (%s)", checked)
 
     def _announce() -> None:
         login._wait_for_tui()
