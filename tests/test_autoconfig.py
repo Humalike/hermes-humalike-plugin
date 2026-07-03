@@ -82,6 +82,12 @@ def test_whatsapp_fills_only_unset_keys():
     assert not any("GROUP_POLICY" in t for t in fixed)  # preset key untouched
 
 
+def test_whatsapp_opening_up_warns_about_personal_number():
+    _, _, statuses, _, _ = _plan(done={"core"}, env={"WHATSAPP_ENABLED": "true"})
+    warns = [t for k, t in statuses if k == "warn"]
+    assert warns and "personal" in warns[0] and "EVERYONE" in warns[0], statuses
+
+
 def test_whatsapp_already_right_shows_verified():
     _, env_updates, statuses, _, _ = _plan(done={"core"}, env={
         "WHATSAPP_ENABLED": "true", "WHATSAPP_ALLOW_ALL_USERS": "true",

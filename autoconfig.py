@@ -119,7 +119,15 @@ def plan(cfg: dict, env: dict, done: set) -> tuple[dict, dict, list, list, list]
                 statuses.append(("fixed", f"{key}: {_was(env.get(key))} → {value} — {why} (.env)"))
                 wa_fixes += 1
         sections.append("whatsapp")
-        if not wa_fixes:
+        if wa_fixes:
+            # Opening up a messaging number is a behavior change worth a loud
+            # word — especially if it's someone's PERSONAL WhatsApp.
+            statuses.append(("warn", "WhatsApp will now reply to EVERYONE who messages this "
+                                     "number — DMs and all groups. If this is a personal "
+                                     "number, tighten it in ~/.hermes/.env: "
+                                     "WHATSAPP_ALLOW_ALL_USERS=false (paired users only) "
+                                     "and/or WHATSAPP_GROUP_POLICY=allowlist."))
+        else:
             statuses.append(("ok", "WhatsApp"))
 
     # ── Slack: respond to everyone (same only-if-unset rule), plus the one
@@ -220,6 +228,8 @@ def maybe_autoconfigure() -> None:
     for kind, label in statuses:
         if kind == "fixed":
             _log.warning("turn-taking: autoconfigured %s", label)
+        elif kind == "warn":
+            _log.warning("turn-taking: %s", label)
         else:
             _log.info("turn-taking: autoconfig verified %s — already right", label)
     if not statuses and not todos:
@@ -228,8 +238,8 @@ def maybe_autoconfigure() -> None:
     any_fixed = any(kind == "fixed" for kind, _ in statuses)
     header = ("🔧 Humalike plugin — configured hermes for turn-taking:" if any_fixed
               else "✅ Humalike plugin — turn-taking setup verified:")
-    lines = [f"   {'•' if kind == 'fixed' else '✓'} {label}"
-             + ("" if kind == "fixed" else " — already right")
+    _PREFIX = {"fixed": "• ", "warn": "⚠ ", "ok": "✓ "}
+    lines = [f"   {_PREFIX[kind]}{label}" + (" — already right" if kind == "ok" else "")
              for kind, label in statuses]
     if any_fixed:
         lines.append("   Restart hermes once to apply.")
