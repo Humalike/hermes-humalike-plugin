@@ -46,6 +46,16 @@ git clone https://github.com/Humalike/hermes-humalike-plugin ~/.hermes/plugins/h
 hermes plugins enable humalike
 ```
 
+Then start Hermes so the plugin loads and runs its first-start setup:
+
+```bash
+hermes
+```
+
+(`hermes plugins enable` only records the plugin; nothing happens until Hermes
+actually starts. Use whatever command runs your bot - `hermes`, or your gateway
+start command.)
+
 No env setup needed: the API URL defaults to `https://api.humalike.com`, and
 the API key comes from a device login the plugin runs for you:
 
