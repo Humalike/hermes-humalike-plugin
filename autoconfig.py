@@ -250,11 +250,15 @@ def maybe_autoconfigure() -> None:
     lines = [f"   {'• ' if kind == 'fixed' else '✓ '}{label}"
              + (" — already right" if kind == "ok" else "")
              for kind, label in body]
-    if any_fixed:
-        lines.append("   Restart hermes once to apply.")
     parts = ["\n".join([header] + lines)] if body else []
     parts.extend(todos)
     parts.extend(f"⚠ {w}" for w in warns)
+    if any_fixed:
+        # Closing footer, last line of the whole report: the host reads these
+        # settings at startup, so a change made during THIS boot only takes
+        # effect on the next one — restart once more after the setup finishes.
+        parts.append("↻ Restart the hermes gateway once more after this setup to load the "
+                     "updated configuration.")
     report = "\n\n" + "\n\n".join(parts) + "\n"
 
     def _announce() -> None:
