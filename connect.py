@@ -77,12 +77,18 @@ async def command(raw_args: str) -> str:
     if _config.api_key():
         return ("✅ Already connected — HUMALIKE_API_KEY is set. To relink, remove it from "
                 f"{_ENV_FILE}, restart the gateway, and send /connect again.")
+    # A login may already be in flight — /connect's own, or the first-boot
+    # popup (whose print a TUI banner can hide): RE-SHOW that link instead of
+    # minting a competing session.
+    pending = login.PENDING_URI
+    if _PENDING.is_set() or pending:
+        if pending:
+            return f"⏳ A connect link is already waiting — approve it here:\n\n{pending}"
+        return "⏳ A connect link is already waiting to be approved — open it, or wait for it to expire and send /connect again."
     if not _gateway_key():
         return ("⚠️ /connect isn't configured on this install (no HUMALIKE_CLI_GATEWAY_KEY). "
                 "Create an API key at https://humalike.com and add it to "
                 f"{_ENV_FILE} as HUMALIKE_API_KEY=… instead.")
-    if _PENDING.is_set():
-        return "⏳ A connect link is already waiting to be approved — open it, or wait for it to expire and send /connect again."
     # No await between the is_set() check and set() (single-threaded loop), so
     # two concurrent /connect can't both pass. Cleared by _watch, or below on failure.
     _PENDING.set()
@@ -95,6 +101,7 @@ async def command(raw_args: str) -> str:
             )
             r.raise_for_status()
             session = r.json()
+        login.PENDING_URI = session["verification_uri"]  # /connect re-shows it while pending
         threading.Thread(target=_watch, args=(route, session), daemon=True, name="humalike-connect").start()
     except Exception as e:
         _PENDING.clear()
@@ -144,6 +151,7 @@ def _watch(route: Tuple[Any, str], session: dict) -> None:
         _log.warning("connect: poll loop errored: %s", e)
     finally:
         _PENDING.clear()
+        login.PENDING_URI = None
     if message:
         _log.info("connect: %s", message)  # headless installs read the outcome here
         _deliver(route, message)

@@ -217,6 +217,24 @@ def test_command_single_flight():
     assert "already waiting" in reply, reply
 
 
+def test_command_reshows_pending_first_boot_link():
+    """A TUI banner can hide the first-boot popup's print — /connect must
+    re-show the pending link, not mint a competing session."""
+    _clean_env()
+    login.PENDING_URI = "https://humalike.com/cli/auth?code=hcu_x"
+    try:
+        reply = asyncio.run(connect.command(""))
+    finally:
+        login.PENDING_URI = None
+        _clean_env()
+    assert "hcu_x" in reply, reply
+
+
+def test_poll_session_expired_ttl_is_instant():
+    got = login.poll_session({"expires_in": 0, "device_code": "hcd_x"}, "gk")
+    assert got == {"status": "expired"}, got
+
+
 def test_command_failure_clears_pending():
     """The stubbed httpx has no AsyncClient, so the create call fails exactly
     like a network error — the guard flag must not stay stranded."""

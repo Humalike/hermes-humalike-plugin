@@ -49,6 +49,11 @@ GATEWAY_KEY_DEFAULT = "hcg_360rQLmr4iabWKiEqc5ZFXY5sUM8g-wTjFO3cwNgTlI"
 
 _MARKER = Path.home() / ".hermes" / ".turn_taking_login_prompted"
 
+# The not-yet-approved link, while a login (first-boot or /connect) is in
+# flight — None when idle. Lets /connect RE-SHOW the pending link instead of
+# starting a duplicate session (a TUI banner can paint over the first print).
+PENDING_URI = None
+
 
 # ── Config (env first, then ~/.hermes/.env) ───────────────────────────────────
 def read_env_file(path: Path | None = None) -> dict:
@@ -111,15 +116,22 @@ def create_session(bearer: str) -> dict:
                          "os": platform.system()}, bearer)
 
 
-def poll_session(session: dict, bearer: str) -> dict:
+def poll_session(session: dict, bearer: str, on_wait=None) -> dict:
     """Blocking poll until a terminal status; returns the final poll body
     (``{'status': 'expired'}`` synthesized on TTL). Any HTTP error is transient
     by contract — keep polling; the session TTL is the real deadline. Unknown
-    future statuses are treated as pending."""
+    future statuses are treated as pending. ``on_wait(elapsed_seconds)`` is
+    called once per loop — the terminal flow uses it to re-print the link."""
     interval = max(1, int(session.get("interval", 3)))
-    deadline = time.monotonic() + int(session.get("expires_in", 600))
+    start = time.monotonic()
+    deadline = start + int(session.get("expires_in", 600))
     while time.monotonic() < deadline:
         time.sleep(interval)
+        if on_wait is not None:
+            try:
+                on_wait(time.monotonic() - start)
+            except Exception:
+                pass
         try:
             data = post(POLL, {"device_code": session["device_code"]}, bearer)
         except Exception:
@@ -161,7 +173,23 @@ def run() -> int:
     except Exception:
         pass
 
-    data = poll_session(session, bearer)
+    # The hermes TUI banner paints over the first print (it renders a beat
+    # after plugin registration) — re-print while pending so the link lands in
+    # view. /connect also re-shows PENDING_URI on demand.
+    reminders = {15, 60, 180}
+
+    def _remind(elapsed: float) -> None:
+        due = {t for t in reminders if t <= elapsed}
+        if due:
+            reminders.difference_update(due)
+            print(f"\n⏳ Humalike login still waiting — approve at: {uri}\n")
+
+    global PENDING_URI
+    PENDING_URI = uri
+    try:
+        data = poll_session(session, bearer, on_wait=_remind)
+    finally:
+        PENDING_URI = None
     status = data.get("status")
     if status == "authorized":
         key = data.get("api_key") or ""
