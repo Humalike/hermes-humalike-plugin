@@ -52,6 +52,12 @@ the API key comes from a device login the plugin runs for you:
 - **From chat**: send the bot `/connect`. Same flow, and the key goes live
   without a restart.
 
+The first start also configures hermes itself: the required chat settings
+(streaming off, one shared thread per group, tool chatter hidden) and — when
+WhatsApp or Slack is connected — the respond-to-everyone group settings.
+Telegram's two manual steps (BotFather privacy mode, group ids) are prompted
+on the console. Restart once after that first boot to apply.
+
 Already have a key, or need a different environment? `~/.hermes/.env`
 overrides (`Authorization: Bearer`):
 

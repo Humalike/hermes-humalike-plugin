@@ -19,7 +19,7 @@ import logging
 import os
 from pathlib import Path
 
-from . import _config, connect, login, social_learning, soul
+from . import _config, autoconfig, connect, login, social_learning, soul
 from .turn_taking.hooks import on_transform_llm_output
 from .turn_taking.patching import (
     _patch__enqueue_text_event,
@@ -221,6 +221,14 @@ def register(ctx) -> None:
     otherwise) — the ``/soul`` persona command is registered regardless (it
     uses the separate Personas API, not the turn-taking service).
     """
+    try:
+        # First boot: apply the deterministic parts of the install/configure
+        # skills (required config.yaml settings; respond-to-everyone env for
+        # WhatsApp/Slack when in use; Telegram's manual steps prompted). Runs
+        # BEFORE _warn_misconfig so the warnings reflect the fixed state.
+        autoconfig.maybe_autoconfigure()
+    except Exception as e:
+        _log.warning("turn-taking: autoconfig skipped: %s", e)
     _warn_misconfig()
     try:
         # First keyless boot: pop the device-auth login once (browser tab on a

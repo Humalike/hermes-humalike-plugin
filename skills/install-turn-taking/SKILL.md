@@ -45,6 +45,10 @@ same login automatically, and `/connect` in chat (step 4) is the fallback.
 
 ## 3. Required config
 
+The plugin applies the settings below AUTOMATICALLY on its first boot (and
+prompts Telegram's manual steps) — treat this section as verify/override, or
+apply it by hand when the gateway can't be restarted twice.
+
 First find where SOUL.md actually lives: check `~/.hermes/SOUL.md`; if it's not
 there, search the Hermes install for an existing one (e.g. a `docker/SOUL.md`
 or a path mounted into the gateway). If none exists anywhere, use
@@ -79,6 +83,11 @@ device — the key is then saved to `~/.hermes/.env` and goes live without
 another restart.
 
 ## Platform notes
+
+WhatsApp and Slack respond-to-everyone settings are auto-applied on the
+plugin's first boot for platforms already connected (only filling values the
+operator hasn't set). The skills below remain for Telegram (always manual),
+later-added platforms, and overrides:
 
 - **WhatsApp groups** — respond to everyone: `configure-whatsapp-group` skill.
 - **Telegram groups** — privacy mode + chat authorization: `configure-telegram-group` skill.

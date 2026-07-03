@@ -125,13 +125,14 @@ def _wait_for_tui(timeout: float = 8.0) -> None:
 
 
 # ── Key persistence ───────────────────────────────────────────────────────────
-def write_env_key(path: Path, key: str) -> None:
-    """Upsert ``HUMALIKE_API_KEY=…``, preserving every other line. A fresh file
-    is created 0600 from the first byte (no world-readable window)."""
+def upsert_env(path: Path, updates: dict) -> None:
+    """Upsert ``KEY=VALUE`` lines, preserving every other line (comments
+    included). A fresh file is created 0600 from the first byte (no
+    world-readable window — it can hold a live credential)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = path.read_text().splitlines() if path.exists() else []
-    lines = [ln for ln in lines if not ln.startswith("HUMALIKE_API_KEY=")]
-    lines.append(f"HUMALIKE_API_KEY={key}")
+    lines = [ln for ln in lines if ln.split("=", 1)[0].strip() not in updates]
+    lines += [f"{k}={v}" for k, v in updates.items()]
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as fh:
         fh.write("\n".join(lines) + "\n")
@@ -139,6 +140,11 @@ def write_env_key(path: Path, key: str) -> None:
         path.chmod(0o600)  # a pre-existing file keeps its old mode otherwise
     except Exception:
         pass
+
+
+def write_env_key(path: Path, key: str) -> None:
+    """Upsert the API key (see :func:`upsert_env`)."""
+    upsert_env(path, {"HUMALIKE_API_KEY": key})
 
 
 # ── The device-auth API (sync, stdlib) ────────────────────────────────────────
