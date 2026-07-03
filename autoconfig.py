@@ -122,11 +122,12 @@ def plan(cfg: dict, env: dict, done: set) -> tuple[dict, dict, list, list, list]
         if wa_fixes:
             # Opening up a messaging number is a behavior change worth a loud
             # word — especially if it's someone's PERSONAL WhatsApp.
-            statuses.append(("warn", "WhatsApp will now reply to EVERYONE who messages this "
-                                     "number — DMs and all groups. If this is a personal "
-                                     "number, tighten it in ~/.hermes/.env: "
-                                     "WHATSAPP_ALLOW_ALL_USERS=false (paired users only) "
-                                     "and/or WHATSAPP_GROUP_POLICY=allowlist."))
+            statuses.append(("warn",
+                             "WHATSAPP WILL NOW REPLY TO EVERYONE WHO MESSAGES THIS NUMBER — "
+                             "DMS AND ALL GROUPS.\n"
+                             "  If this is a personal number, tighten it in ~/.hermes/.env: "
+                             "WHATSAPP_ALLOW_ALL_USERS=false (paired users only) and/or "
+                             "WHATSAPP_GROUP_POLICY=allowlist."))
         else:
             statuses.append(("ok", "WhatsApp"))
 
@@ -235,16 +236,21 @@ def maybe_autoconfigure() -> None:
     if not statuses and not todos:
         return
 
-    any_fixed = any(kind == "fixed" for kind, _ in statuses)
+    # Warnings render LAST — bottom of the whole report, right above the
+    # prompt, where they're hardest to miss.
+    warns = [label for kind, label in statuses if kind == "warn"]
+    body = [(kind, label) for kind, label in statuses if kind != "warn"]
+    any_fixed = any(kind == "fixed" for kind, _ in body)
     header = ("🔧 Humalike plugin — configured hermes for turn-taking:" if any_fixed
               else "✅ Humalike plugin — turn-taking setup verified:")
-    _PREFIX = {"fixed": "• ", "warn": "⚠ ", "ok": "✓ "}
-    lines = [f"   {_PREFIX[kind]}{label}" + (" — already right" if kind == "ok" else "")
-             for kind, label in statuses]
+    lines = [f"   {'• ' if kind == 'fixed' else '✓ '}{label}"
+             + (" — already right" if kind == "ok" else "")
+             for kind, label in body]
     if any_fixed:
         lines.append("   Restart hermes once to apply.")
-    parts = ["\n".join([header] + lines)] if statuses else []
+    parts = ["\n".join([header] + lines)] if body else []
     parts.extend(todos)
+    parts.extend(f"⚠ {w}" for w in warns)
     report = "\n\n" + "\n\n".join(parts) + "\n"
 
     def _announce() -> None:
