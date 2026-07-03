@@ -35,7 +35,19 @@ from pathlib import Path
 
 _log = logging.getLogger(__name__)
 
-HERMES_ENV = Path.home() / ".hermes" / ".env"
+def _hermes_home() -> Path:
+    """The real hermes home: the host's single source of truth when importable
+    (HERMES_HOME-aware, platform-native defaults), else the env var, else
+    ``~/.hermes`` (login.py run standalone outside the hermes venv)."""
+    try:
+        from hermes_constants import get_hermes_home  # noqa: PLC0415
+
+        return Path(get_hermes_home())
+    except Exception:
+        return Path(os.getenv("HERMES_HOME") or "~/.hermes").expanduser()
+
+
+HERMES_ENV = _hermes_home() / ".env"
 DEFAULT_API = "https://api.humalike.com"
 CREATE = "/v1/keys/actions/cli_create"
 POLL = "/v1/keys/actions/cli_poll"
@@ -47,7 +59,7 @@ POLL = "/v1/keys/actions/cli_poll"
 # HUMALIKE_CLI_GATEWAY_KEY (e.g. for staging).
 GATEWAY_KEY_DEFAULT = "hcg_360rQLmr4iabWKiEqc5ZFXY5sUM8g-wTjFO3cwNgTlI"
 
-_MARKER = Path.home() / ".hermes" / ".turn_taking_login_prompted"
+_MARKER = _hermes_home() / ".turn_taking_login_prompted"
 
 # The not-yet-approved link, while a login (first-boot or /connect) is in
 # flight — None when idle. Lets /connect RE-SHOW the pending link instead of

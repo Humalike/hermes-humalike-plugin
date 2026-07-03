@@ -31,8 +31,10 @@ from . import login
 
 _log = logging.getLogger(__name__)
 
-_MARKER = Path.home() / ".hermes" / ".turn_taking_autoconfigured"
-_CONFIG = Path.home() / ".hermes" / "config.yaml"
+# Resolved through the host's own HERMES_HOME-aware resolver (login._hermes_home)
+# so a relocated install gets its REAL files updated, not a stray ~/.hermes.
+_MARKER = login._hermes_home() / ".turn_taking_autoconfigured"
+_CONFIG = login._hermes_home() / "config.yaml"
 
 _TRUE = {"true", "1", "yes"}  # the host's truthy set for enable flags
 
