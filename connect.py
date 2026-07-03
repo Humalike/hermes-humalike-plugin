@@ -77,6 +77,13 @@ def _headers() -> dict:
 # ── Command handler (registered as /connect) ──────────────────────────────────
 async def command(raw_args: str) -> str:
     """Start a device-auth session and reply with the approval link."""
+    # Capture the invoking chat FIRST, before any await: the /connect message
+    # itself just went through the inbound gate, so the pair still names this
+    # chat. Awaiting first would let any other chat's inbound overwrite the
+    # globals during the HTTP round-trip and mis-route the confirmation. A
+    # residual race (another chat between the gate and this handler) remains;
+    # it carries no secret — worst case the wrong chat sees "Connected as <email>".
+    route = (state.LAST_ADAPTER, state.LAST_CHAT_ID)
     if _config.api_key():
         return ("✅ Already connected — HUMALIKE_API_KEY is set. To relink, remove it from "
                 f"{_ENV_FILE}, restart the gateway, and send /connect again.")
@@ -86,6 +93,9 @@ async def command(raw_args: str) -> str:
                 f"{_ENV_FILE} as HUMALIKE_API_KEY=… instead.")
     if _PENDING.is_set():
         return "⏳ A connect link is already waiting to be approved — open it, or wait for it to expire and send /connect again."
+    # No await between the is_set() check and set() (single-threaded loop), so
+    # two concurrent /connect can't both pass. Cleared by _watch, or below on failure.
+    _PENDING.set()
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             r = await client.post(
@@ -95,22 +105,30 @@ async def command(raw_args: str) -> str:
             )
             r.raise_for_status()
             session = r.json()
+        threading.Thread(target=_watch, args=(route, session), daemon=True, name="humalike-connect").start()
     except Exception as e:
+        _PENDING.clear()
+        status = getattr(getattr(e, "response", None), "status_code", None)
+        if status is not None:
+            _log.warning("connect: cli_create → HTTP %s: %s", status, getattr(e.response, "text", "")[:200])
+            return (f"⚠️ Humalike rejected the connect request (HTTP {status}) — "
+                    "check HUMALIKE_CLI_GATEWAY_KEY, then send /connect again.")
         _log.warning("connect: cli_create failed: %s", e)
         return "⚠️ Couldn't reach Humalike to start the link — check the gateway's network and send /connect again."
 
-    # The /connect message itself just went through the inbound gate, so this IS
-    # the invoking chat. A message racing in from another chat between the gate
-    # and this handler could mis-route the confirmation (rare; it carries no
-    # secret — worst case the wrong chat sees "Connected as <email>").
-    route = (state.LAST_ADAPTER, state.LAST_CHAT_ID)
-    _PENDING.set()
-    threading.Thread(target=_watch, args=(route, session), daemon=True, name="humalike-connect").start()
-
     minutes = max(1, int(session.get("expires_in", 600)) // 60)
+    if route[0] is not None and route[1]:
+        tail = f"I'll confirm here once you're done — the link is valid for ~{minutes} minutes."
+    else:
+        # No deliverable route (URL unset → no patches, or a platform whose
+        # commands bypass our inbound gate): don't promise a confirmation we
+        # can't send — the outcome lands in the gateway log instead.
+        tail = (f"The link is valid for ~{minutes} minutes. I can't post a confirmation in this chat, "
+                f"so after approving, check that HUMALIKE_API_KEY appeared in {_ENV_FILE} "
+                "(the outcome is also in the gateway log).")
     reply = ("🔗 Open this link on any device and approve to connect your Humalike account:\n\n"
              f"{session['verification_uri']}\n\n"
-             f"I'll confirm here once you're done — the link is valid for ~{minutes} minutes. "
+             f"{tail} "
              "(Anyone who opens it can link their own account, so prefer a DM in a busy group.)")
     if not _config.service_url():
         reply += ("\n\nHeads-up: HUMALIKE_API_URL isn't set, so after approving you still need to add "
@@ -133,6 +151,7 @@ def _watch(route: Tuple[Any, str], session: dict) -> None:
     finally:
         _PENDING.clear()
     if message:
+        _log.info("connect: %s", message)  # headless installs read the outcome here
         _deliver(route, message)
 
 
@@ -155,7 +174,6 @@ async def _poll(session: dict) -> Optional[str]:
             status = data.get("status")
             if status == "authorized":
                 _save_key(data.get("api_key") or "")
-                _log.info("connect: linked to Humalike account")
                 return _done_message(data)
             if status in ("denied", "expired"):
                 return _result_message(status)
@@ -189,14 +207,17 @@ def _save_key(key: str) -> None:
 
 
 def _write_env(path: Path, key: str) -> None:
-    """Upsert ``HUMALIKE_API_KEY=…``, preserving every other line."""
+    """Upsert ``HUMALIKE_API_KEY=…``, preserving every other line. A fresh file
+    is created 0600 from the first byte (no world-readable window)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = path.read_text().splitlines() if path.exists() else []
     lines = [ln for ln in lines if not ln.startswith("HUMALIKE_API_KEY=")]
     lines.append(f"HUMALIKE_API_KEY={key}")
-    path.write_text("\n".join(lines) + "\n")
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        fh.write("\n".join(lines) + "\n")
     try:
-        path.chmod(0o600)  # it now holds a live credential
+        path.chmod(0o600)  # a pre-existing file keeps its old mode otherwise
     except Exception:
         pass
 
@@ -206,7 +227,11 @@ def _deliver(route: Tuple[Any, str], text: str) -> None:
     """Send the outcome to the chat /connect came from, via the genuine
     pre-patch ``send`` (notify's idiom) so the draft-suppression patch can't
     swallow it. No route (e.g. a platform whose commands bypass our inbound
-    gate) → the home-channel startup queue as a best-effort fallback."""
+    gate) → the home-channel startup queue as a best-effort fallback — that
+    queue only flushes while the patches are active, which is why command()
+    stops promising an in-chat confirmation when the route is empty.
+    ponytail: sent without platform metadata, so on a Telegram forum-group the
+    confirmation lands in the General topic, not the invoking one."""
     adapter, chat_id = route
     if adapter is None or not chat_id:
         notify.queue_startup(text)

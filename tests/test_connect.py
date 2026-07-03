@@ -106,6 +106,28 @@ def test_command_single_flight():
     assert "already waiting" in reply, reply
 
 
+def test_command_failure_clears_pending():
+    """The stubbed httpx has no AsyncClient, so the create call fails exactly
+    like a network error — the guard flag must not stay stranded."""
+    _clean_env()
+    os.environ["HUMALIKE_CLI_GATEWAY_KEY"] = "gk"
+    try:
+        reply = asyncio.run(connect.command(""))
+    finally:
+        _clean_env()
+    assert "Couldn't reach Humalike" in reply, reply
+    assert not connect._PENDING.is_set()
+
+
+def test_write_env_tightens_existing_file_mode():
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / ".env"
+        p.write_text("X=1\n")
+        p.chmod(0o644)
+        connect._write_env(p, "ak_new")
+        assert (p.stat().st_mode & 0o777) == 0o600
+
+
 # ── Outcome messages ──────────────────────────────────────────────────────────
 def test_result_messages_offer_retry():
     assert "/connect" in connect._result_message("denied")

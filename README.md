@@ -55,6 +55,10 @@ browser on any device (your phone works — nothing needs to open on the gateway
 box, so SSH/VM/Docker installs are fine) and the key is saved to
 `~/.hermes/.env` and goes live without a restart.
 
+`/connect` authenticates its setup calls with the plugin's public client
+identifier — until a default ships baked in, also set
+`HUMALIKE_CLI_GATEWAY_KEY` in `~/.hermes/.env` (value in the Humalike docs).
+
 `~/.hermes/config.yaml` — all required:
 
 ```yaml
