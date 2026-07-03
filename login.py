@@ -106,6 +106,24 @@ def _show(text: str) -> None:
     print(text)
 
 
+def _wait_for_tui(timeout: float = 8.0) -> None:
+    """Hold the FIRST link display until the hermes TUI has painted, so it
+    prints through run_in_terminal right below the banner instead of being
+    buried above it. Returns fast when no TUI is coming: immediately when
+    prompt_toolkit is absent (bare console), on timeout in the gateway."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            from prompt_toolkit.application import get_app_or_none
+        except Exception:
+            return
+        app = get_app_or_none()
+        if app is not None and app.is_running:
+            time.sleep(0.3)  # let the banner finish painting
+            return
+        time.sleep(0.2)
+
+
 # ── Key persistence ───────────────────────────────────────────────────────────
 def write_env_key(path: Path, key: str) -> None:
     """Upsert ``HUMALIKE_API_KEY=…``, preserving every other line. A fresh file
@@ -165,8 +183,12 @@ def poll_session(session: dict, bearer: str, on_wait=None) -> dict:
 
 
 # ── Terminal flow ─────────────────────────────────────────────────────────────
-def run() -> int:
-    """0 = key saved (or already present), 1 = failed/denied/expired."""
+def run(wait_for_tui: bool = False) -> int:
+    """0 = key saved (or already present), 1 = failed/denied/expired.
+
+    ``wait_for_tui`` (the first-boot path inside hermes): delay the first
+    link display until the TUI is up, so the link lands BELOW the banner —
+    a pre-banner print just scrolls out of sight."""
     if cfg("HUMALIKE_API_KEY"):
         print("Already connected — HUMALIKE_API_KEY is set.")
         return 0
@@ -183,23 +205,24 @@ def run() -> int:
 
     uri = session["verification_uri"]
     minutes = max(1, int(session.get("expires_in", 600)) // 60)
-    # print for the terminal AND log for gateway/TUI runs, where a rich UI can
-    # swallow a background thread's stdout — the log file keeps the URL findable.
+    # Log first (always findable), open the browser ASAP (desktop case), and
+    # only THEN display — after the TUI is up when asked, so the link prints
+    # below the banner via run_in_terminal instead of scrolling away above it.
     _log.warning("humalike login: approve at %s (valid ~%d min)", uri, minutes)
-    _show("\nOpen this link on any device and approve to connect your Humalike account:\n"
-          f"\n    {uri}\n"
-          f"\nWaiting for approval (link valid ~{minutes} min)…")
     try:
         import webbrowser
 
         webbrowser.open(uri)  # pops a tab on a desktop; harmless no-op headless
     except Exception:
         pass
+    if wait_for_tui:
+        _wait_for_tui()
+    _show("\nOpen this link on any device and approve to connect your Humalike account:\n"
+          f"\n    {uri}\n"
+          f"\nWaiting for approval (link valid ~{minutes} min)…")
 
-    # The hermes TUI banner paints over the first print (it renders a beat
-    # after plugin registration) — re-print while pending so the link lands in
-    # view. /connect also re-shows PENDING_URI on demand.
-    reminders = {15, 60, 180}
+    # Gentle nudges while pending; /connect also re-shows PENDING_URI on demand.
+    reminders = {60, 180}
 
     def _remind(elapsed: float) -> None:
         due = {t for t in reminders if t <= elapsed}
@@ -249,7 +272,7 @@ def maybe_first_boot_login() -> None:
         _MARKER.write_text("1")
     except OSError:
         pass  # best-effort; worst case the prompt repeats next boot
-    threading.Thread(target=run, daemon=True, name="humalike-login").start()
+    threading.Thread(target=lambda: run(wait_for_tui=True), daemon=True, name="humalike-login").start()
 
 
 if __name__ == "__main__":
