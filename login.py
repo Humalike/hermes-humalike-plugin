@@ -219,7 +219,7 @@ def run(wait_for_tui: bool = False) -> int:
         _wait_for_tui()
     _show("\nOpen this link on any device and approve to connect your Humalike account:\n"
           f"\n    {uri}\n"
-          f"\nWaiting for approval (link valid ~{minutes} min)…")
+          f"\nWaiting for approval (link valid ~{minutes} min)…\n")
 
     # Gentle nudges while pending; /connect also re-shows PENDING_URI on demand.
     reminders = {60, 180}
