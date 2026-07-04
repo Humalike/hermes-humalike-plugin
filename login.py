@@ -265,11 +265,16 @@ def run(wait_for_tui: bool = False) -> int:
     # only THEN display — after the TUI is up when asked, so the link prints
     # below the banner via run_in_terminal instead of scrolling away above it.
     _log.warning("humalike login: approve at %s (valid ~%d min)", uri, minutes)
-    # Plain stdout too, flushed: the TUI-safe _show routes through the prompt
-    # app's terminal, which `docker compose logs` (stdout) never sees — this
-    # line is the one a headless/containerized operator can actually read.
-    print(f"[Humalike] Connect your account — approve at: {uri}  (valid ~{minutes} min)",
-          flush=True)
+    # Headless/containerized: write straight to fd 1 so the link reaches
+    # `docker compose logs` even when a TUI or a logging redirect owns
+    # sys.stdout. Guarded to non-TTY only — on a real terminal a raw write
+    # would fight prompt_toolkit for the screen; there _show renders it cleanly.
+    if not sys.stdout.isatty():
+        try:
+            os.write(1, (f"[Humalike] Connect your account — approve at: {uri}  "
+                         f"(valid ~{minutes} min)\n").encode())
+        except OSError:
+            pass
     try:
         import webbrowser
 

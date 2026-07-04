@@ -192,7 +192,11 @@ def _warn_misconfig() -> None:
     try:
         import yaml
 
-        cfg = yaml.safe_load((Path.home() / ".hermes" / "config.yaml").read_text()) or {}
+        # Same HERMES_HOME-aware path autoconfig WRITES to — a hardcoded
+        # ~/.hermes here reads a stray/empty file under a relocated home (Docker
+        # HERMES_HOME=/opt/data, Windows), warning about config that is actually
+        # correct on disk. login._hermes_home() is the host's own resolver.
+        cfg = yaml.safe_load((login._hermes_home() / "config.yaml").read_text()) or {}
     except FileNotFoundError:
         cfg = {}
     except Exception as e:
