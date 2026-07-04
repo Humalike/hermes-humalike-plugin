@@ -152,6 +152,7 @@ async def _handle_inbound(self: Any, event: Any) -> None:
     notify.flush_pending()  # deliver any queued startup misconfig alerts (cheap no-op after 1st)
     _patch__reply_anchor_for_event(self)  # bind per-turn raw message_id (queue-robust)
     source = event.source
+    state.LAST_CHAT_ID = str(getattr(source, "chat_id", "") or "")  # /connect reply route
     message_id = str(getattr(event, "message_id", "") or "")
     _log.info("tt inbound: chat=%s sender=%s mid=%s text=%r",
               getattr(source, "chat_id", None), getattr(source, "user_name", None),
@@ -342,6 +343,8 @@ async def _handle_observed_group(self: Any, event: Any, replay: Callable[[], Any
         state.LOOP = asyncio.get_running_loop()
     except RuntimeError:
         pass
+    state.LAST_ADAPTER = self  # notify.py fallback when no thread ever opened
+    notify.flush_pending()  # observe-only deployments never reach _handle_inbound
     _patch__reply_anchor_for_event(self)
     message_id = str(getattr(event, "message_id", "") or "")
     source = event.source

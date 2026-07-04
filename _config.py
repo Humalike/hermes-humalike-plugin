@@ -5,9 +5,14 @@ from __future__ import annotations
 import os
 
 
+DEFAULT_API = "https://api.humalike.com"
+
+
 def service_url() -> str:
-    """Base URL for all Humalike calls (``HUMALIKE_API_URL``)."""
-    return os.getenv("HUMALIKE_API_URL", "").rstrip("/")
+    """Base URL for all Humalike calls (``HUMALIKE_API_URL``). Defaults to the
+    public API so a fresh install needs zero env setup; set it EMPTY
+    (``HUMALIKE_API_URL=``) to explicitly disable turn-taking."""
+    return os.getenv("HUMALIKE_API_URL", DEFAULT_API).rstrip("/")
 
 
 def api_key() -> str:

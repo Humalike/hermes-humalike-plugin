@@ -9,30 +9,57 @@ Humalike plugin for [Hermes Agent](https://github.com/NousResearch/hermes-agent)
 turn-taking, persona (`/soul enhance`), theory of mind, social learning.
 API docs: <https://docs.humalike.com>.
 
-Do the steps in order. Ask the user only for the value marked **ask** (the API
-key); the URL defaults to `https://api.humalike.com`.
+The normal flow is just **clone → enable → start `hermes`**: starting the
+gateway is what applies the required config and pops the login, so steps 2–3
+below are mostly what that first start does for you, plus the manual fallbacks.
+No env setup is required — the API URL defaults to `https://api.humalike.com`
+and the API key comes from the device login. Only ask for a key if the user
+says they already have one. Do the steps in order.
 
 ## 1. Clone and enable
 
 ```bash
-git clone https://github.com/Humalike/hermes-humalike-plugin ~/.hermes/plugins/turn-taking
+git clone https://github.com/Humalike/hermes-humalike-plugin ~/.hermes/plugins/humalike
 
 # `hermes` must be the Hermes CLI from its install — activate the Hermes
 # virtualenv first (or call the hermes CLI by its full path)
-hermes plugins enable turn-taking
+hermes plugins enable humalike
 ```
 
-## 2. Env vars
+## 2. Start Hermes — this applies the config and pops the login
 
-In `~/.hermes/.env` (create if missing) — one URL + one key covers all
-Humalike calls, sent as `Authorization: Bearer`:
+`hermes plugins enable` only records the plugin; nothing runs until the gateway
+starts. Start it (activate the Hermes virtualenv first, or use your gateway
+start command):
 
 ```bash
-HUMALIKE_API_URL=https://api.humalike.com
-HUMALIKE_API_KEY=your-api-key                 # ask
+hermes
 ```
 
+On this first start the plugin self-configures (step 3) and prints a device
+login URL — opening a browser tab when the machine has one. The user approves
+on any device (a phone works) and the key is saved to `~/.hermes/.env`.
+
+Two ways to skip that login:
+
+- **Already have a key** — put it in `~/.hermes/.env` (create if missing)
+  *before* starting, and the login isn't shown:
+  ```bash
+  HUMALIKE_API_KEY=their-api-key
+  ```
+- **Headless / can't keep the terminal open** — run the same login by hand:
+  ```bash
+  python3 ~/.hermes/plugins/humalike/login.py
+  ```
+
+If the login is dismissed, `/connect` in chat (step 4) links an account later
+without a restart.
+
 ## 3. Required config
+
+The plugin applies the settings below AUTOMATICALLY on its first boot (and
+prompts Telegram's manual steps) — treat this section as verify/override, or
+apply it by hand when the gateway can't be restarted twice.
 
 First find where SOUL.md actually lives: check `~/.hermes/SOUL.md`; if it's not
 there, search the Hermes install for an existing one (e.g. a `docker/SOUL.md`
@@ -47,10 +74,11 @@ streaming: false
 group_sessions_per_user: false
 display:
   tool_progress: "off"   # hide tool-call chatter (Browsing/Clicking/…) so replies read as human
+slack:
+  reply_in_thread: false # only if Slack is used — one shared conversation per channel
 
 turn_taking:
   soul_path: "<the SOUL.md path found above>"
-  soul_grounding: "off"    # off | web | research — real-world research on enhance
   soul_auto_enhance: true  # one-shot persona enhance on first startup
 ```
 
@@ -58,10 +86,21 @@ turn_taking:
 
 Restart the Hermes gateway, then send the bot a message. A `tt inbound: chat=…`
 line in `~/.hermes/logs/gateway.log` confirms turn-taking is intercepting
-messages. If none appears, `HUMALIKE_API_URL` isn't set in the gateway's
-environment — turn-taking stays disabled (`/soul` still works).
+messages. If none appears, the plugin didn't load — check it shows as enabled
+in `hermes plugins list` (or `HUMALIKE_API_URL` was explicitly set empty,
+which disables turn-taking; `/soul` still works).
+
+No API key set in step 2? Have the user send the bot `/connect` (from a DM,
+not a group): it replies with a login link they approve in a browser on any
+device — the key is then saved to `~/.hermes/.env` and goes live without
+another restart.
 
 ## Platform notes
+
+WhatsApp and Slack respond-to-everyone settings are auto-applied on the
+plugin's first boot for platforms already connected (only filling values the
+operator hasn't set). The skills below remain for Telegram (always manual),
+later-added platforms, and overrides:
 
 - **WhatsApp groups** — respond to everyone: `configure-whatsapp-group` skill.
 - **Telegram groups** — privacy mode + chat authorization: `configure-telegram-group` skill.

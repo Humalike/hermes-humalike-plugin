@@ -89,8 +89,10 @@ from ..turn_taking import notify  # noqa: E402
 
 
 def _get_service_url() -> str:
-    """Base URL (``HUMALIKE_API_URL``)."""
-    return _config.service_url()
+    """Base URL (``HUMALIKE_API_URL``) — empty while no API key is set, so no
+    conversation transcript ever leaves the machine keyless (the call would
+    401 anyway; /connect un-gates this in-process, no restart needed)."""
+    return _config.service_url() if _config.api_key() else ""
 
 
 def _log_requests_enabled() -> bool:
@@ -238,6 +240,74 @@ def _refresh_card(session_id: str, conversation_history: Any) -> None:
         notify.alert_social(exc)
 
 
+# ── Detached refresh (shared by warm-up and the per-turn hook) ───────────────
+_REFRESHING: set = set()  # session ids with a refresh thread in flight
+
+
+def _spawn_refresh(session_id: str, history: Any) -> bool:
+    """Start a detached ``_refresh_card`` unless one is already in flight for
+    this session — at most one concurrent POST per session, so a slow or dead
+    service costs one 60s thread per session, not one per message (the no-card
+    branch fires every turn). Returns True if a thread was spawned.
+    ponytail: in-flight guard only; add time-based backoff if per-turn retries
+    against a dead service ever matter."""
+    with _LOCK:
+        if session_id in _REFRESHING:
+            return False
+        _REFRESHING.add(session_id)
+
+    def _run() -> None:
+        try:
+            _refresh_card(session_id, history)
+        finally:
+            with _LOCK:
+                _REFRESHING.discard(session_id)
+
+    try:
+        threading.Thread(target=_run, daemon=True).start()
+    except Exception:
+        with _LOCK:
+            _REFRESHING.discard(session_id)  # don't leak the guard: the run never happened
+        raise
+    return True
+
+
+# ── Startup warm-up ──────────────────────────────────────────────────────────
+WARM_SESSIONS: int = 5
+
+
+def warm_recent_sessions(limit: int = WARM_SESSIONS) -> None:
+    """Build voice cards for the ``limit`` most-recently-active sessions at
+    plugin registration, instead of waiting for each session's first
+    ``pre_llm_call``. Read-only DB access (no write-lock contention with the
+    live gateway); each session's history is fetched via the same
+    ``get_messages_as_conversation`` the gateway itself uses to restore
+    context, so the very first reply after a fresh install already has a
+    card if that session has prior history. Best-effort: never raises."""
+    try:
+        if not _get_service_url():
+            return
+        from hermes_constants import get_hermes_home  # noqa: PLC0415
+        from hermes_state import SessionDB  # noqa: PLC0415
+
+        db_path = get_hermes_home() / "state.db"
+        if not db_path.exists():
+            return
+        db = SessionDB(db_path=db_path, read_only=True)
+        sessions = db.list_sessions_rich(limit=limit, order_by_last_active=True)
+        for s in sessions:
+            session_id = s.get("id")
+            with _LOCK:
+                already_cached = session_id in _CACHE
+            if not session_id or already_cached:
+                continue
+            history = db.get_messages_as_conversation(session_id)
+            _spawn_refresh(session_id, history)
+        logger.info("social-learning: warm-up fired for up to %d recent session(s)", len(sessions))
+    except Exception as exc:
+        logger.debug("social-learning: warm_recent_sessions failed: %s", exc)
+
+
 # ── Hook ──────────────────────────────────────────────────────────────────────
 def on_pre_llm_call(**kwargs: Any) -> Optional[Dict[str, Any]]:
     """pre_llm_call hook: inject the voice card and (every REFRESH_EVERY turns) refresh it."""
@@ -257,13 +327,12 @@ def on_pre_llm_call(**kwargs: Any) -> Optional[Dict[str, Any]]:
             n, session_id, "cached" if has_card else "none", REFRESH_EVERY,
         )
 
-        if n % REFRESH_EVERY == 0 and _get_service_url():
-            logger.info("social-learning: turn %d session %s — firing detached refresh", n, session_id)
-            threading.Thread(
-                target=_refresh_card,
-                args=(session_id, list(conversation_history)),
-                daemon=True,
-            ).start()
+        if (not has_card or n % REFRESH_EVERY == 0) and _get_service_url():
+            if _spawn_refresh(session_id, list(conversation_history)):
+                logger.info(
+                    "social-learning: turn %d session %s — firing detached refresh (%s)",
+                    n, session_id, "no card yet" if not has_card else "scheduled",
+                )
 
         with _LOCK:
             card = _CACHE.get(session_id)
