@@ -31,7 +31,6 @@ from .turn_taking.patching import (
     _patch_telegram_observe_group,
 )
 from .turn_taking import notify
-from .turn_taking.service import _service_url
 
 _log = logging.getLogger(__name__)
 
@@ -278,8 +277,13 @@ def register(ctx) -> None:
         social_learning.warm_recent_sessions()
     except Exception as e:
         _log.warning("turn-taking: social-learning warm-up skipped: %s", e)
-    if not _service_url():
-        return  # already warned loudly in _warn_misconfig()
+    if not login.has_working_key():
+        # No usable API key → turn-taking stays a no-op this boot (the login
+        # popped above drives connection; /soul and the social-learning hook,
+        # which self-gate on the key, are already registered). Patches install
+        # on the next boot once a working key is in .env.
+        _log.info("turn-taking: no working API key yet — patches not installed this boot")
+        return
     sent = _patch_send()
     inbound = _patch__enqueue_text_event()
     poll = _patch__poll_messages()

@@ -12,8 +12,8 @@ is approved, then writes HUMALIKE_API_KEY into ``~/.hermes/.env``.
 
 Three callers share this module:
   * the terminal (``__main__``) — install-time login,
-  * ``register()`` via :func:`maybe_first_boot_login` — pops the login once on
-    the first keyless gateway boot (marker-guarded),
+  * ``register()`` via :func:`maybe_first_boot_login` — pops the login on every
+    boot that has no working API key (see :func:`has_working_key`),
   * ``connect.py`` — reuses :func:`poll_session` and :func:`write_env_key`.
 
 Config is read from the process environment first, then ``~/.hermes/.env`` —
@@ -30,6 +30,7 @@ import socket
 import sys
 import threading
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -51,6 +52,11 @@ HERMES_ENV = _hermes_home() / ".env"
 DEFAULT_API = "https://api.humalike.com"
 CREATE = "/v1/keys/actions/cli_create"
 POLL = "/v1/keys/actions/cli_poll"
+# Key-validation probe: authed by the USER key (Bearer HUMALIKE_API_KEY), 200 =
+# works, 401/403 = dead. None until the svc-keys endpoint lands — while None,
+# a present key counts as working (no network call, no needless re-login).
+# TODO: set to the whoami/validate path once it exists (see the server ticket).
+WHOAMI_PATH: str | None = None
 
 # RFC 8628 public client identifier for the CLI lane: it names the client (a
 # Hermes plugin install) to the API and unlocks ONLY cli_create/cli_poll — the
@@ -58,8 +64,6 @@ POLL = "/v1/keys/actions/cli_poll"
 # this ships in the open like any OAuth public client_id. Override with
 # HUMALIKE_CLI_GATEWAY_KEY (e.g. for staging).
 GATEWAY_KEY_DEFAULT = "hcg_360rQLmr4iabWKiEqc5ZFXY5sUM8g-wTjFO3cwNgTlI"
-
-_MARKER = _hermes_home() / ".turn_taking_login_prompted"
 
 # The not-yet-approved link, while a login (first-boot or /connect) is in
 # flight — None when idle. Lets /connect RE-SHOW the pending link instead of
@@ -145,18 +149,52 @@ def upsert_env(path: Path, updates: dict) -> None:
     lines = path.read_text().splitlines() if path.exists() else []
     lines = [ln for ln in lines if ln.split("=", 1)[0].strip() not in updates]
     lines += [f"{k}={v}" for k, v in updates.items()]
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    # Atomic swap: write a private temp then os.replace onto the real path, so a
+    # crash or a second process writing concurrently can never truncate .env and
+    # lose the platform tokens. Temp is pid-unique so two writers don't clobber
+    # each other's temp; os.replace is atomic, last writer wins cleanly.
+    tmp = path.with_name(f"{path.name}.tmp.{os.getpid()}")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as fh:
         fh.write("\n".join(lines) + "\n")
-    try:
-        path.chmod(0o600)  # a pre-existing file keeps its old mode otherwise
-    except Exception:
-        pass
+    os.replace(tmp, path)
 
 
 def write_env_key(path: Path, key: str) -> None:
     """Upsert the API key (see :func:`upsert_env`)."""
     upsert_env(path, {"HUMALIKE_API_KEY": key})
+
+
+# ── Key validation ────────────────────────────────────────────────────────────
+_key_ok: bool | None = None  # per-process cache: probe whoami at most once a boot
+
+
+def _probe(key: str) -> bool:
+    """Ask the API whether ``key`` is live. True on 2xx; True on ANY network or
+    server error (an outage must not force a needless re-login); False ONLY on
+    an explicit 401/403 rejection."""
+    try:
+        req = urllib.request.Request(
+            api_url() + WHOAMI_PATH, data=b"{}",
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=5):  # noqa: S310 — our own API URL
+            return True
+    except urllib.error.HTTPError as e:
+        return e.code not in (401, 403)
+    except Exception:
+        return True
+
+
+def has_working_key() -> bool:
+    """True when a usable API key is configured (cached per process). No key →
+    False. Key present → validated via ``WHOAMI_PATH`` when set; until that
+    endpoint exists, presence alone counts as working (no probe, no re-login)."""
+    global _key_ok
+    if _key_ok is None:
+        key = cfg("HUMALIKE_API_KEY")
+        _key_ok = bool(key) and (True if not WHOAMI_PATH else _probe(key))
+    return _key_ok
 
 
 # ── The device-auth API (sync, stdlib) ────────────────────────────────────────
@@ -207,8 +245,8 @@ def run(wait_for_tui: bool = False) -> int:
     ``wait_for_tui`` (the first-boot path inside hermes): delay the first
     link display until the TUI is up, so the link lands BELOW the banner —
     a pre-banner print just scrolls out of sight."""
-    if cfg("HUMALIKE_API_KEY"):
-        print("Already connected — HUMALIKE_API_KEY is set.")
+    if has_working_key():
+        print("Already connected — HUMALIKE_API_KEY is set and valid.")
         return 0
     bearer = gateway_key()
     if not bearer:
@@ -227,6 +265,11 @@ def run(wait_for_tui: bool = False) -> int:
     # only THEN display — after the TUI is up when asked, so the link prints
     # below the banner via run_in_terminal instead of scrolling away above it.
     _log.warning("humalike login: approve at %s (valid ~%d min)", uri, minutes)
+    # Plain stdout too, flushed: the TUI-safe _show routes through the prompt
+    # app's terminal, which `docker compose logs` (stdout) never sees — this
+    # line is the one a headless/containerized operator can actually read.
+    print(f"[Humalike] Connect your account — approve at: {uri}  (valid ~{minutes} min)",
+          flush=True)
     try:
         import webbrowser
 
@@ -260,6 +303,8 @@ def run(wait_for_tui: bool = False) -> int:
         key = data.get("api_key") or ""
         write_env_key(HERMES_ENV, key)
         os.environ["HUMALIKE_API_KEY"] = key  # live for this process too
+        global _key_ok
+        _key_ok = True  # freshly minted key is valid — don't re-probe this boot
         who = (data.get("account") or {}).get("email") or "your account"
         _log.warning("humalike login: connected as %s", who)
         _show(f"\n✅ Connected as {who} — key saved to {HERMES_ENV}.\n")
@@ -271,26 +316,19 @@ def run(wait_for_tui: bool = False) -> int:
 
 # ── First-boot popup (called from register()) ─────────────────────────────────
 def maybe_first_boot_login() -> None:
-    """Pop the login once, on the first keyless gateway boot: a browser tab on
-    a desktop, the printed URL on the gateway console otherwise. Runs on a
-    daemon thread so boot never blocks on the ~10-minute approval window.
-
-    Marker written when the prompt FIRES, not on success — an ignored tab must
-    not reopen on every boot. Retry paths: delete the marker, rerun login.py,
-    or send /connect."""
-    if cfg("HUMALIKE_API_KEY"):
-        return  # already connected
+    """(Re)run the device login whenever there is no WORKING API key — every
+    boot until connected. No marker: the source of truth is the key itself
+    (:func:`has_working_key`), not an 'already asked' flag, so a login the
+    operator couldn't see (headless) or that a restart interrupted simply
+    re-offers next boot instead of being lost forever. Runs on a daemon thread
+    so boot never blocks on the ~10-minute approval window. Concurrent boots
+    (gateway + dashboard) may each pop a link; the unapproved one just expires
+    and the .env write is atomic, so nothing is corrupted or wedged."""
     if not gateway_key():
         _log.info("humalike login: skipped — no client identifier configured")
         return
-    if _MARKER.exists():
-        _log.info("humalike login: already prompted once (delete %s to retry, or send /connect)", _MARKER)
-        return
-    try:
-        _MARKER.parent.mkdir(parents=True, exist_ok=True)
-        _MARKER.write_text("1")
-    except OSError:
-        pass  # best-effort; worst case the prompt repeats next boot
+    if has_working_key():
+        return  # connected and valid — nothing to do
     threading.Thread(target=lambda: run(wait_for_tui=True), daemon=True, name="humalike-login").start()
 
 

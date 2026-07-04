@@ -54,12 +54,12 @@ connect, login = _load()
 # the real .env otherwise, which would make these tests machine-dependent.
 _TMP = Path(tempfile.mkdtemp())
 login.HERMES_ENV = _TMP / ".env"
-login._MARKER = _TMP / ".login_prompted"
 
 
 def _clean_env():
     for k in ("HUMALIKE_API_KEY", "HUMALIKE_API_URL", "HUMALIKE_CLI_GATEWAY_KEY"):
         os.environ.pop(k, None)
+    login._key_ok = None  # reset the per-process key-validation cache between tests
 
 
 # ── login.write_env_key: the .env upsert ──────────────────────────────────────
@@ -141,10 +141,54 @@ def test_run_without_gateway_key_fails_with_manual_hint():
         login.GATEWAY_KEY_DEFAULT = orig
 
 
-# ── login.maybe_first_boot_login: the once-marker and the thread ─────────────
-def test_first_boot_login_fires_once():
+# ── login.has_working_key: the source of truth ───────────────────────────────
+def test_has_working_key_no_key_is_false():
     _clean_env()
-    os.environ["HUMALIKE_CLI_GATEWAY_KEY"] = "gk"
+    assert login.has_working_key() is False
+
+
+def test_has_working_key_present_key_without_probe_is_true():
+    """WHOAMI_PATH unset → a present key counts as working, no network call."""
+    _clean_env()
+    os.environ["HUMALIKE_API_KEY"] = "ak_x"
+    orig, login.WHOAMI_PATH = login.WHOAMI_PATH, None
+    try:
+        assert login.has_working_key() is True
+    finally:
+        login.WHOAMI_PATH = orig
+        _clean_env()
+
+
+def test_probe_rejects_only_on_401_403():
+    """401/403 → key dead (False); every other error → assume live (True), so an
+    API outage never forces a needless re-login."""
+    import urllib.error
+
+    def _raise(code):
+        def _p(*a, **k):
+            raise urllib.error.HTTPError("u", code, "x", {}, None)
+        return _p
+
+    orig = login.urllib.request.urlopen
+    orig_path, login.WHOAMI_PATH = login.WHOAMI_PATH, "/v1/keys/actions/whoami"
+    try:
+        login.urllib.request.urlopen = _raise(401)
+        assert login._probe("ak_x") is False
+        login.urllib.request.urlopen = _raise(403)
+        assert login._probe("ak_x") is False
+        login.urllib.request.urlopen = _raise(500)
+        assert login._probe("ak_x") is True          # server blip → assume live
+        def _boom(*a, **k):
+            raise OSError("network down")
+        login.urllib.request.urlopen = _boom
+        assert login._probe("ak_x") is True          # unreachable → assume live
+    finally:
+        login.urllib.request.urlopen = orig
+        login.WHOAMI_PATH = orig_path
+
+
+# ── login.maybe_first_boot_login: fires whenever there is no working key ──────
+def _capture_threads():
     started = []
 
     class _T:
@@ -154,33 +198,43 @@ def test_first_boot_login_fires_once():
         def start(self):
             pass
 
-    orig_threading, login.threading = login.threading, types.SimpleNamespace(Thread=_T)
-    login._MARKER.unlink(missing_ok=True)
+    return started, types.SimpleNamespace(Thread=_T)
+
+
+def test_first_boot_login_fires_when_no_working_key():
+    """No marker: with a gateway key and no API key, every call pops the login
+    (self-healing — an unseen/interrupted login re-offers next boot)."""
+    _clean_env()
+    os.environ["HUMALIKE_CLI_GATEWAY_KEY"] = "gk"
+    started, fake = _capture_threads()
+    orig_threading, login.threading = login.threading, fake
     try:
         login.maybe_first_boot_login()
-        assert len(started) == 1 and login._MARKER.exists()
-        login.maybe_first_boot_login()  # marker present → no second popup
-        assert len(started) == 1
+        login._key_ok = None                 # simulate a fresh boot, still keyless
+        login.maybe_first_boot_login()
+        assert len(started) == 2             # fires again — no once-marker
     finally:
         login.threading = orig_threading
-        login._MARKER.unlink(missing_ok=True)
         _clean_env()
 
 
 def test_first_boot_login_skipped_when_connected_or_unconfigured():
     _clean_env()
-    login._MARKER.unlink(missing_ok=True)
+    started, fake = _capture_threads()
+    orig_threading, login.threading = login.threading, fake
     orig, login.GATEWAY_KEY_DEFAULT = login.GATEWAY_KEY_DEFAULT, ""
     try:
-        login.maybe_first_boot_login()  # no gateway key → no-op
-        assert not login._MARKER.exists()
+        login.maybe_first_boot_login()       # no gateway key → no-op
+        assert started == []
     finally:
         login.GATEWAY_KEY_DEFAULT = orig
+    _clean_env()
     os.environ.update(HUMALIKE_CLI_GATEWAY_KEY="gk", HUMALIKE_API_KEY="ak_x")
     try:
-        login.maybe_first_boot_login()  # already connected → no-op
-        assert not login._MARKER.exists()
+        login.maybe_first_boot_login()       # working key present → no-op
+        assert started == []
     finally:
+        login.threading = orig_threading
         _clean_env()
 
 
