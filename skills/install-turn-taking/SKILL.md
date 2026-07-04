@@ -9,9 +9,12 @@ Humalike plugin for [Hermes Agent](https://github.com/NousResearch/hermes-agent)
 turn-taking, persona (`/soul enhance`), theory of mind, social learning.
 API docs: <https://docs.humalike.com>.
 
-Do the steps in order. No env setup is required: the API URL defaults to
-`https://api.humalike.com` and the API key comes from a device login (step 2).
-Only ask for a key if the user says they already have one.
+The normal flow is just **clone → enable → start `hermes`**: starting the
+gateway is what applies the required config and pops the login, so steps 2–3
+below are mostly what that first start does for you, plus the manual fallbacks.
+No env setup is required — the API URL defaults to `https://api.humalike.com`
+and the API key comes from the device login. Only ask for a key if the user
+says they already have one. Do the steps in order.
 
 ## 1. Clone and enable
 
@@ -23,25 +26,34 @@ git clone https://github.com/Humalike/hermes-humalike-plugin ~/.hermes/plugins/h
 hermes plugins enable humalike
 ```
 
-## 2. Connect the Humalike account
+## 2. Start Hermes — this applies the config and pops the login
 
-No env vars needed. If the user already has an API key, put it in
-`~/.hermes/.env` (create if missing) and skip the login:
-
-```bash
-HUMALIKE_API_KEY=their-api-key   # optional — only when they already have one
-```
-
-Otherwise run the device login now, in the terminal:
+`hermes plugins enable` only records the plugin; nothing runs until the gateway
+starts. Start it (activate the Hermes virtualenv first, or use your gateway
+start command):
 
 ```bash
-python3 ~/.hermes/plugins/humalike/login.py
+hermes
 ```
 
-It prints the approval URL and opens a browser tab when the install machine
-has one; the user approves on any device (phone works) and the key lands in
-`.env` before first boot. If you skip this, the first gateway start pops the
-same login automatically, and `/connect` in chat (step 4) is the fallback.
+On this first start the plugin self-configures (step 3) and prints a device
+login URL — opening a browser tab when the machine has one. The user approves
+on any device (a phone works) and the key is saved to `~/.hermes/.env`.
+
+Two ways to skip that login:
+
+- **Already have a key** — put it in `~/.hermes/.env` (create if missing)
+  *before* starting, and the login isn't shown:
+  ```bash
+  HUMALIKE_API_KEY=their-api-key
+  ```
+- **Headless / can't keep the terminal open** — run the same login by hand:
+  ```bash
+  python3 ~/.hermes/plugins/humalike/login.py
+  ```
+
+If the login is dismissed, `/connect` in chat (step 4) links an account later
+without a restart.
 
 ## 3. Required config
 
