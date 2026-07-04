@@ -8,6 +8,8 @@ together:
       build), patching (the gateway monkeypatches), hooks (the plugin hooks)
   - ``social_learning/``  the per-conversation voice card (pre_llm_call hook)
   - ``soul/``             the SOUL.md persona feature (the /soul command)
+  - ``native_memory``     strips native memory's *style* capture (the voice card
+                          above owns style) so the two layers don't double-record
 
 This module only registers the plugin's command, hooks, and patches.
 """
@@ -19,7 +21,7 @@ import logging
 import os
 from pathlib import Path
 
-from . import _config, autoconfig, connect, login, social_learning, soul
+from . import _config, autoconfig, connect, login, native_memory, social_learning, soul
 from .turn_taking.hooks import on_transform_llm_output
 from .turn_taking.patching import (
     _patch__enqueue_text_event,
@@ -281,6 +283,13 @@ def register(ctx) -> None:
         social_learning.warm_recent_sessions()
     except Exception as e:
         _log.warning("turn-taking: social-learning warm-up skipped: %s", e)
+    # Native memory owns durable FACTS; the voice card above owns STYLE. Stop
+    # native memory from also capturing style so the two layers don't
+    # double-record it (and a stale snapshot can't fight the live card).
+    try:
+        native_memory.strip_native_style_capture()
+    except Exception as e:
+        _log.warning("turn-taking: native-memory style strip skipped: %s", e)
     if not login.has_working_key():
         # No usable API key → turn-taking stays a no-op this boot (the login
         # popped above drives connection; /soul and the social-learning hook,
