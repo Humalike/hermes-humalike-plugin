@@ -56,11 +56,10 @@ hermes
 actually starts. Use whatever command runs your bot - `hermes`, or your gateway
 start command.)
 
-No env setup needed: the API URL defaults to `https://api.humalike.com`, and
-the key is handled for you. When you start Hermes, the plugin applies its
-configuration and prints a login URL on the console (and opens a browser tab
-when the machine has one). Open it on any device - your phone works - approve,
-and the key is saved to `~/.hermes/.env`.
+On first start the plugin applies every required config
+change itself and prints what it changed, where, and why. For authentication it
+prints a login URL (and opens a browser tab when the machine has one) - approve
+on any device and the key is saved to `~/.hermes/.env`.
 
 You can also send the bot `/connect` at any time to link an account from chat;
 the key goes live without a restart.
