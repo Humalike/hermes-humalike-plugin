@@ -54,6 +54,9 @@ connect, login = _load()
 # the real .env otherwise, which would make these tests machine-dependent.
 _TMP = Path(tempfile.mkdtemp())
 login.HERMES_ENV = _TMP / ".env"
+# Neutralize the network probe by default so "present key = works" tests never
+# hit the wire; the probe tests set WHOAMI_PATH explicitly.
+login.WHOAMI_PATH = None
 
 
 def _clean_env():
@@ -157,6 +160,34 @@ def test_has_working_key_present_key_without_probe_is_true():
     finally:
         login.WHOAMI_PATH = orig
         _clean_env()
+
+
+def test_has_working_key_probes_when_path_set():
+    """WHOAMI_PATH set: a present key is validated — 200 → works, 401 → dead."""
+    import urllib.error
+    from unittest.mock import patch
+
+    orig_path, login.WHOAMI_PATH = login.WHOAMI_PATH, "/v1/turn-taking/actions/whoami"
+    orig_urlopen = login.urllib.request.urlopen
+
+    class _OK:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    try:
+        with patch.dict(os.environ, {"HUMALIKE_API_KEY": "ak_x"}, clear=False):
+            login._key_ok = None
+            login.urllib.request.urlopen = lambda *a, **k: _OK()      # 2xx
+            assert login.has_working_key() is True
+            login._key_ok = None
+            def _401(*a, **k):
+                raise urllib.error.HTTPError("u", 401, "x", {}, None)
+            login.urllib.request.urlopen = _401
+            assert login.has_working_key() is False                  # dead key → re-login
+    finally:
+        login.urllib.request.urlopen = orig_urlopen
+        login.WHOAMI_PATH = orig_path
+        login._key_ok = None
 
 
 def test_probe_rejects_only_on_401_403():

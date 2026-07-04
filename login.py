@@ -53,10 +53,9 @@ DEFAULT_API = "https://api.humalike.com"
 CREATE = "/v1/keys/actions/cli_create"
 POLL = "/v1/keys/actions/cli_poll"
 # Key-validation probe: authed by the USER key (Bearer HUMALIKE_API_KEY), 200 =
-# works, 401/403 = dead. None until the svc-keys endpoint lands — while None,
-# a present key counts as working (no network call, no needless re-login).
-# TODO: set to the whoami/validate path once it exists (see the server ticket).
-WHOAMI_PATH: str | None = None
+# works, 401/403 = dead. svc-turn-taking whoami — a zero-side-effect identity
+# echo (POST {}, returns {user_id}), safe to call on every start.
+WHOAMI_PATH: str | None = "/v1/turn-taking/actions/whoami"
 
 # RFC 8628 public client identifier for the CLI lane: it names the client (a
 # Hermes plugin install) to the API and unlocks ONLY cli_create/cli_poll — the
