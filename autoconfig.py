@@ -5,7 +5,8 @@ install needs no hand-editing (the same zero-config principle as login.py):
 
 * ``config.yaml`` — the settings the plugin REQUIRES to own the reply:
   ``streaming: false``, ``group_sessions_per_user: false``,
-  ``display.tool_progress: "off"`` (install-turn-taking step 3), and
+  ``display.tool_progress: "off"`` (install-turn-taking step 3),
+  ``display.busy_ack_enabled: false`` (no deterministic busy acks), and
   ``slack.reply_in_thread: false`` when Slack is in use (the default trues it,
   making every top-level channel message its own thread AND session).
 * ``.env`` — respond-to-everyone settings for platforms actually in use, only
@@ -96,11 +97,19 @@ def plan(cfg: dict, env: dict, done: set) -> tuple[dict, dict, list, list, list]
                          "→ false — a group chat needs ONE shared conversation, not one per "
                          "member (config.yaml)")
         display = cfg.get("display") if isinstance(cfg.get("display"), dict) else {}
+        display_updates = {}
         if display.get("tool_progress") != "off":
-            config_updates["display"] = {**display, "tool_progress": "off"}
+            display_updates["tool_progress"] = "off"
             fixes.append(f"display.tool_progress: {_was(display.get('tool_progress'))} → off — "
                          "hide tool-call chatter (Browsing/Clicking…) so replies read as human "
                          "(config.yaml)")
+        if display.get("busy_ack_enabled") is not False:
+            display_updates["busy_ack_enabled"] = False
+            fixes.append(f"display.busy_ack_enabled: {_was(display.get('busy_ack_enabled'))} → "
+                         "false — suppress the deterministic '⚡ Interrupting current task…' "
+                         "busy acks; a human doesn't announce that (config.yaml)")
+        if display_updates:
+            config_updates["display"] = {**display, **display_updates}
         sections.append("core")
         statuses.extend(("fixed", f) for f in fixes)
         if not fixes:

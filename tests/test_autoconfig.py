@@ -36,7 +36,7 @@ autoconfig, login = _load()
 login.HERMES_ENV = Path(tempfile.mkdtemp()) / ".env"  # never read the real one
 
 _COMPLIANT = {"streaming": False, "group_sessions_per_user": False,
-              "display": {"tool_progress": "off"}}
+              "display": {"tool_progress": "off", "busy_ack_enabled": False}}
 
 
 def _plan(cfg=None, env=None, done=None):
@@ -47,10 +47,10 @@ def _plan(cfg=None, env=None, done=None):
 def test_fresh_install_fixes_all_core_settings():
     config_updates, env_updates, statuses, todos, sections = _plan()
     assert config_updates == {"streaming": False, "group_sessions_per_user": False,
-                              "display": {"tool_progress": "off"}}, config_updates
+                              "display": {"tool_progress": "off", "busy_ack_enabled": False}}, config_updates
     assert not env_updates and not todos
     assert sections == ["core"]
-    assert len(statuses) == 3 and all(k == "fixed" for k, _ in statuses)
+    assert len(statuses) == 4 and all(k == "fixed" for k, _ in statuses)
     assert "streaming: (unset) → false" in statuses[0][1]  # old → new shown
 
 
@@ -65,7 +65,8 @@ def test_core_done_is_skipped_and_display_merge_preserves_keys():
     config_updates, _, statuses, _, sections = _plan(cfg=dict(_COMPLIANT), done={"core"})
     assert not config_updates and not statuses and not sections
     config_updates, _, _, _, _ = _plan(cfg={"display": {"theme": "x"}})
-    assert config_updates["display"] == {"theme": "x", "tool_progress": "off"}
+    assert config_updates["display"] == {"theme": "x", "tool_progress": "off",
+                                         "busy_ack_enabled": False}
 
 
 # ── Platforms ─────────────────────────────────────────────────────────────────
@@ -147,7 +148,7 @@ def test_every_changed_value_reports_old_to_new():
         "WHATSAPP_ENABLED": "true", "SLACK_BOT_TOKEN": "xoxb-1",
         "TELEGRAM_BOT_TOKEN": "123:abc"})
     fixed = [t for k, t in statuses if k == "fixed"]
-    assert len(fixed) == 9, fixed  # 3 core + 3 whatsapp + 2 slack env + 1 slack cfg
+    assert len(fixed) == 10, fixed  # 4 core + 3 whatsapp + 2 slack env + 1 slack cfg
     assert all(" → " in t for t in fixed), [t for t in fixed if " → " not in t]
     assert all("(.env)" in t or "(config.yaml)" in t for t in fixed), fixed
     # and the plan really contains all 9 writes
