@@ -36,7 +36,9 @@ autoconfig, login = _load()
 login.HERMES_ENV = Path(tempfile.mkdtemp()) / ".env"  # never read the real one
 
 _COMPLIANT = {"streaming": False, "group_sessions_per_user": False,
-              "display": {"tool_progress": "off", "busy_ack_enabled": False}}
+              "display": {"tool_progress": "off", "busy_ack_enabled": False,
+                          "memory_notifications": "off"},
+              "agent": {"disabled_toolsets": ["clarify"]}}
 
 
 def _plan(cfg=None, env=None, done=None):
@@ -47,10 +49,12 @@ def _plan(cfg=None, env=None, done=None):
 def test_fresh_install_fixes_all_core_settings():
     config_updates, env_updates, statuses, todos, sections = _plan()
     assert config_updates == {"streaming": False, "group_sessions_per_user": False,
-                              "display": {"tool_progress": "off", "busy_ack_enabled": False}}, config_updates
+                              "display": {"tool_progress": "off", "busy_ack_enabled": False,
+                                          "memory_notifications": "off"},
+                              "agent": {"disabled_toolsets": ["clarify"]}}, config_updates
     assert not env_updates and not todos
     assert sections == ["core"]
-    assert len(statuses) == 4 and all(k == "fixed" for k, _ in statuses)
+    assert len(statuses) == 6 and all(k == "fixed" for k, _ in statuses)
     assert "streaming: (unset) → false" in statuses[0][1]  # old → new shown
 
 
@@ -66,7 +70,27 @@ def test_core_done_is_skipped_and_display_merge_preserves_keys():
     assert not config_updates and not statuses and not sections
     config_updates, _, _, _, _ = _plan(cfg={"display": {"theme": "x"}})
     assert config_updates["display"] == {"theme": "x", "tool_progress": "off",
-                                         "busy_ack_enabled": False}
+                                         "busy_ack_enabled": False,
+                                         "memory_notifications": "off"}
+
+
+def test_memory_notifications_must_be_the_string_off():
+    """A bare YAML `off` loads as False — the gateway's falsy-check would turn
+    that back into "on", so the planner must rewrite it to the string."""
+    cfg = {**_COMPLIANT, "display": {**_COMPLIANT["display"], "memory_notifications": False}}
+    config_updates, _, _, _, _ = _plan(cfg=cfg)
+    assert config_updates["display"]["memory_notifications"] == "off"
+
+
+def test_disabled_toolsets_appends_and_preserves_existing():
+    config_updates, _, _, _, _ = _plan(
+        cfg={**_COMPLIANT, "agent": {"max_turns": 150, "disabled_toolsets": ["memory"]}})
+    assert config_updates == {"agent": {"max_turns": 150,
+                                        "disabled_toolsets": ["memory", "clarify"]}}
+    # clarify already there (any position, other entries too) → agent untouched
+    config_updates, _, _, _, _ = _plan(
+        cfg={**_COMPLIANT, "agent": {"disabled_toolsets": ["clarify", "memory"]}})
+    assert "agent" not in config_updates
 
 
 # ── Platforms ─────────────────────────────────────────────────────────────────
@@ -143,16 +167,16 @@ def test_telegram_is_prompt_only():
 
 def test_every_changed_value_reports_old_to_new():
     """Completeness invariant: a full fresh sweep (all platforms in use,
-    nothing configured) changes 9 values, and EVERY one reports 'old → new'."""
+    nothing configured) changes 12 values, and EVERY one reports 'old → new'."""
     config_updates, env_updates, statuses, _, _ = _plan(env={
         "WHATSAPP_ENABLED": "true", "SLACK_BOT_TOKEN": "xoxb-1",
         "TELEGRAM_BOT_TOKEN": "123:abc"})
     fixed = [t for k, t in statuses if k == "fixed"]
-    assert len(fixed) == 10, fixed  # 4 core + 3 whatsapp + 2 slack env + 1 slack cfg
+    assert len(fixed) == 12, fixed  # 6 core + 3 whatsapp + 2 slack env + 1 slack cfg
     assert all(" → " in t for t in fixed), [t for t in fixed if " → " not in t]
     assert all("(.env)" in t or "(config.yaml)" in t for t in fixed), fixed
-    # and the plan really contains all 9 writes
-    assert len(env_updates) == 5 and len(config_updates) == 4
+    # and the plan really contains all the writes
+    assert len(env_updates) == 5 and len(config_updates) == 5
 
 
 # ── upsert_env (the generic writer autoconfig relies on) ─────────────────────

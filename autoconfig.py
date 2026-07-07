@@ -6,7 +6,13 @@ install needs no hand-editing (the same zero-config principle as login.py):
 * ``config.yaml`` — the settings the plugin REQUIRES to own the reply:
   ``streaming: false``, ``group_sessions_per_user: false``,
   ``display.tool_progress: "off"`` (install-turn-taking step 3),
-  ``display.busy_ack_enabled: false`` (no deterministic busy acks), and
+  ``display.busy_ack_enabled: false`` (no deterministic busy acks),
+  ``display.memory_notifications: "off"`` (no '💾 Self-improvement review'
+  posts — the string "off"; a bare YAML ``off`` parses as False, which the
+  gateway's falsy-check silently turns back into "on"),
+  ``agent.disabled_toolsets: [clarify]`` (the clarify tool's numbered-menu
+  questions are sent by the gateway directly, bypassing naturalization —
+  without the tool the bot asks in plain text like a person), and
   ``slack.reply_in_thread: false`` when Slack is in use (the default trues it,
   making every top-level channel message its own thread AND session).
 * ``.env`` — respond-to-everyone settings for platforms actually in use, only
@@ -108,8 +114,25 @@ def plan(cfg: dict, env: dict, done: set) -> tuple[dict, dict, list, list, list]
             fixes.append(f"display.busy_ack_enabled: {_was(display.get('busy_ack_enabled'))} → "
                          "false — suppress the deterministic '⚡ Interrupting current task…' "
                          "busy acks; a human doesn't announce that (config.yaml)")
+        # Must be the STRING "off": a bare YAML `off` loads as False, and the
+        # gateway's `str(v).lower() if v else "on"` turns falsy back into "on".
+        if display.get("memory_notifications") != "off":
+            display_updates["memory_notifications"] = "off"
+            fixes.append(f"display.memory_notifications: "
+                         f"{_was(display.get('memory_notifications'))} → off — hide the "
+                         "'💾 Self-improvement review…' background-memory summaries; a human "
+                         "doesn't announce memory updates (config.yaml)")
         if display_updates:
             config_updates["display"] = {**display, **display_updates}
+        agent = cfg.get("agent") if isinstance(cfg.get("agent"), dict) else {}
+        disabled = agent.get("disabled_toolsets")
+        disabled = list(disabled) if isinstance(disabled, list) else []
+        if "clarify" not in disabled:
+            config_updates["agent"] = {**agent, "disabled_toolsets": disabled + ["clarify"]}
+            fixes.append(f"agent.disabled_toolsets: {_was(agent.get('disabled_toolsets'))} → "
+                         "+ clarify — the clarify tool's numbered-option menus are sent by the "
+                         "gateway directly, bypassing naturalization; without it the bot asks "
+                         "in plain text (config.yaml)")
         sections.append("core")
         statuses.extend(("fixed", f) for f in fixes)
         if not fixes:
@@ -226,7 +249,8 @@ def maybe_autoconfigure() -> None:
             sections = [s for s in sections if s != "core"]  # retry next boot
             statuses = [s for s in statuses
                         if not s[1].startswith(("streaming:", "group_sessions_per_user:",
-                                                "display.", "slack.reply_in_thread:"))]
+                                                "display.", "agent.disabled_toolsets:",
+                                                "slack.reply_in_thread:"))]
     if env_updates:
         try:
             login.upsert_env(login.HERMES_ENV, env_updates)
