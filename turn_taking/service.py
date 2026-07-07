@@ -56,22 +56,6 @@ def _headers() -> Dict[str, str]:
     return {"Authorization": f"Bearer {_api_key()}", "Content-Type": "application/json"}
 
 
-def _pacing() -> Optional[Dict[str, Any]]:
-    """Per-reply pacing overrides from ``turn_taking.pacing`` in config.yaml,
-    passed verbatim to the service (its ``PacingOverrides``: reading_delay_ms,
-    typing_wpm, max_typing_ms — each optional, absent = service default).
-    Unset/invalid → None (omit the field entirely). Read per call like SOUL.md,
-    so a config edit paces the very next reply, no restart."""
-    try:
-        import yaml
-
-        cfg = yaml.safe_load(_HERMES_CONFIG.read_text()) or {}
-        pacing = (cfg.get("turn_taking") or {}).get("pacing")
-        return dict(pacing) if isinstance(pacing, dict) and pacing else None
-    except Exception:
-        return None
-
-
 # ── Transport ─────────────────────────────────────────────────────────────────
 async def _post(path: str, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """POST ``body`` to ``path`` and return parsed JSON, or None on any failure.
@@ -147,9 +131,6 @@ async def respond(
         body["system_prompt"] = system_prompt[:_SYSTEM_PROMPT_CAP]
     if metadata:
         body["metadata"] = metadata
-    pacing = _pacing()
-    if pacing:
-        body["pacing"] = pacing
     return await _post(RESPOND_PATH, body)
 
 
