@@ -73,14 +73,18 @@ def _build_system_prompt_for_turn_taking(adapter: Any = None, session_id: Option
         return None
 
 
-def _agent_name() -> Optional[str]:
-    """The bot's display name (``agent.name`` in ~/.hermes/config.yaml, or
-    ``HERMES_AGENT_NAME``), passed to the service so the theory-of-mind call
-    labels the bot's own transcript lines with its real name instead of the
-    internal ``agent`` label. When the persona says "You are Hermes" but the
-    transcript says ``agent``, the small ToM model can lose track of which
-    speaker it is (third-person replies, replying to itself). None when unset
-    (service default, current behaviour)."""
+DEFAULT_AGENT_NAME = "Hermes"
+
+
+def _agent_name() -> str:
+    """The bot's display name (``HERMES_AGENT_NAME``, then ``agent.name`` in
+    ~/.hermes/config.yaml, then "Hermes"), passed to the service so the
+    theory-of-mind call labels the bot's own transcript lines with its real
+    name instead of the internal ``agent`` label. When the persona says "You
+    are Hermes" but the transcript says ``agent``, the small ToM model can
+    lose track of which speaker it is (third-person replies, replying to
+    itself). The default matches the product name — right for every install
+    that didn't rename the bot; set agent.name when yours did."""
     env = os.getenv("HERMES_AGENT_NAME", "").strip()
     if env:
         return env
@@ -88,9 +92,9 @@ def _agent_name() -> Optional[str]:
         import yaml
 
         cfg = yaml.safe_load(_HERMES_CONFIG.read_text()) or {}
-        return str((cfg.get("agent") or {}).get("name", "")).strip() or None
+        return str((cfg.get("agent") or {}).get("name", "")).strip() or DEFAULT_AGENT_NAME
     except Exception:
-        return None
+        return DEFAULT_AGENT_NAME
 
 
 def _delivery_meta(event: Any) -> Dict[str, str]:
