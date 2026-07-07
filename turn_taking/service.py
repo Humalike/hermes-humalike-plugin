@@ -144,18 +144,27 @@ async def respond(
     turn_epoch: int,
     system_prompt: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
+    agent_name: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """Naturalize a draft (epoch required, fail-closed). Returns {scheduled, superseded}.
 
     ``metadata`` is an opaque per-turn bag the service echoes verbatim on every
     delivered bubble frame (svc contract ``RespondRequest.metadata``, cap 4 KB) —
     used here to carry the forum-topic id to ``_forward``.
+
+    ``agent_name`` is the bot's display name (svc contract
+    ``RespondRequest.agent_name``, cap 255): the service uses it to label the
+    bot's own lines in the theory-of-mind transcript so the model doesn't
+    confuse the bot with an interlocutor (third-person replies, replying to
+    itself). Omitted → the service's generic internal label.
     """
     body: Dict[str, Any] = {"thread_id": thread_id, "content": content, "turn_epoch": turn_epoch}
     if system_prompt:
         body["system_prompt"] = system_prompt[:_SYSTEM_PROMPT_CAP]
     if metadata:
         body["metadata"] = metadata
+    if agent_name:
+        body["agent_name"] = agent_name[:255]
     body["pacing"] = _pacing()
     return await _post(RESPOND_PATH, body)
 

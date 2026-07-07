@@ -73,6 +73,26 @@ def _build_system_prompt_for_turn_taking(adapter: Any = None, session_id: Option
         return None
 
 
+def _agent_name() -> Optional[str]:
+    """The bot's display name (``agent.name`` in ~/.hermes/config.yaml, or
+    ``HERMES_AGENT_NAME``), passed to the service so the theory-of-mind call
+    labels the bot's own transcript lines with its real name instead of the
+    internal ``agent`` label. When the persona says "You are Hermes" but the
+    transcript says ``agent``, the small ToM model can lose track of which
+    speaker it is (third-person replies, replying to itself). None when unset
+    (service default, current behaviour)."""
+    env = os.getenv("HERMES_AGENT_NAME", "").strip()
+    if env:
+        return env
+    try:
+        import yaml
+
+        cfg = yaml.safe_load(_HERMES_CONFIG.read_text()) or {}
+        return str((cfg.get("agent") or {}).get("name", "")).strip() or None
+    except Exception:
+        return None
+
+
 def _delivery_meta(event: Any) -> Dict[str, str]:
     """Opaque per-turn delivery hints to round-trip through respond → bubble.
 
@@ -141,7 +161,7 @@ async def _respond(
         return False  # this session never decided speak
     _log.info("tt respond: session=%s tid=%s epoch=%s → naturalizing | %r",
               session_id, tid, epoch, (draft or "").strip()[:60])
-    res = await respond(tid, draft, epoch, system_prompt, metadata)
+    res = await respond(tid, draft, epoch, system_prompt, metadata, agent_name=_agent_name())
     if not res or res.get("superseded"):
         _log.info("tt respond: session=%s → DROPPED (superseded=%s / no response)",
                   session_id, bool(res and res.get("superseded")))
