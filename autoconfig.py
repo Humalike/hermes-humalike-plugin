@@ -10,6 +10,8 @@ install needs no hand-editing (the same zero-config principle as login.py):
   ``display.memory_notifications: "off"`` (no '💾 Self-improvement review'
   posts — the string "off"; a bare YAML ``off`` parses as False, which the
   gateway's falsy-check silently turns back into "on"),
+  ``display.platforms.telegram.streaming: false`` (Telegram draft streaming
+  would show the raw draft before naturalization),
   ``agent.disabled_toolsets: [clarify]`` (the clarify tool's numbered-menu
   questions are sent by the gateway directly, bypassing naturalization —
   without the tool the bot asks in plain text like a person), and
@@ -122,6 +124,17 @@ def plan(cfg: dict, env: dict, done: set) -> tuple[dict, dict, list, list, list]
                          f"{_was(display.get('memory_notifications'))} → off — hide the "
                          "'💾 Self-improvement review…' background-memory summaries; a human "
                          "doesn't announce memory updates (config.yaml)")
+        # Explicit false: the shipped defaults turn Telegram draft streaming on
+        # (display.platforms.telegram.streaming: true), and any resolver that
+        # sees that default streams the raw draft BEFORE naturalization.
+        platforms = display.get("platforms") if isinstance(display.get("platforms"), dict) else {}
+        telegram = platforms.get("telegram") if isinstance(platforms.get("telegram"), dict) else {}
+        if telegram.get("streaming") is not False:
+            display_updates["platforms"] = {**platforms, "telegram": {**telegram, "streaming": False}}
+            fixes.append(f"display.platforms.telegram.streaming: {_was(telegram.get('streaming'))} "
+                         "→ false — Telegram's native draft streaming shows the raw draft "
+                         "before naturalization; the plugin must own the final reply text "
+                         "(config.yaml)")
         if display_updates:
             config_updates["display"] = {**display, **display_updates}
         agent = cfg.get("agent") if isinstance(cfg.get("agent"), dict) else {}
