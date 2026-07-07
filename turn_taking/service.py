@@ -56,20 +56,29 @@ def _headers() -> Dict[str, str]:
     return {"Authorization": f"Bearer {_api_key()}", "Content-Type": "application/json"}
 
 
-def _pacing() -> Optional[Dict[str, Any]]:
-    """Per-reply pacing overrides from ``turn_taking.pacing`` in config.yaml,
-    passed verbatim to the service (its ``PacingOverrides``: reading_delay_ms,
-    typing_wpm, max_typing_ms — each optional, absent = service default).
-    Unset/invalid → None (omit the field entirely). Read per call like SOUL.md,
-    so a config edit paces the very next reply, no restart."""
+# The plugin's own pacing default: half the service's stock 150 wpm — the
+# humanlike product wants a slower, more deliberate typist out of the box.
+# Only typing_wpm is pinned; reading delay and the per-message cap stay with
+# the service (it fills every field the request leaves unset).
+_DEFAULT_PACING: Dict[str, Any] = {"typing_wpm": 75}
+
+
+def _pacing() -> Dict[str, Any]:
+    """Per-reply pacing sent on every respond (svc ``PacingOverrides``:
+    reading_delay_ms, typing_wpm, max_typing_ms — each optional, absent =
+    service default). ``turn_taking.pacing`` in config.yaml wins when set to a
+    non-empty mapping; otherwise ``_DEFAULT_PACING``. Read per call like
+    SOUL.md, so a config edit paces the very next reply, no restart."""
     try:
         import yaml
 
         cfg = yaml.safe_load(_HERMES_CONFIG.read_text()) or {}
         pacing = (cfg.get("turn_taking") or {}).get("pacing")
-        return dict(pacing) if isinstance(pacing, dict) and pacing else None
+        if isinstance(pacing, dict) and pacing:
+            return dict(pacing)
     except Exception:
-        return None
+        pass
+    return dict(_DEFAULT_PACING)
 
 
 # ── Transport ─────────────────────────────────────────────────────────────────
@@ -147,9 +156,7 @@ async def respond(
         body["system_prompt"] = system_prompt[:_SYSTEM_PROMPT_CAP]
     if metadata:
         body["metadata"] = metadata
-    pacing = _pacing()
-    if pacing:
-        body["pacing"] = pacing
+    body["pacing"] = _pacing()
     return await _post(RESPOND_PATH, body)
 
 

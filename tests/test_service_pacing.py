@@ -1,8 +1,8 @@
 """``turn_taking.pacing`` in config.yaml rides on every respond as ``pacing``.
 
 The service's PacingOverrides (reading_delay_ms, typing_wpm, max_typing_ms)
-paces this agent's replies only; unset config omits the field so the service
-defaults apply. Run directly:  python3 tests/test_service_pacing.py
+paces this agent's replies only; unset config falls back to the plugin's own
+default (_DEFAULT_PACING). Run directly:  python3 tests/test_service_pacing.py
 """
 
 import asyncio
@@ -65,19 +65,19 @@ def _respond_body(config_text):
 
 
 def test_configured_pacing_rides_on_respond():
-    body = _respond_body("turn_taking:\n  pacing:\n    typing_wpm: 75\n")
-    assert body["pacing"] == {"typing_wpm": 75}
+    body = _respond_body("turn_taking:\n  pacing:\n    typing_wpm: 40\n    reading_delay_ms: 0\n")
+    assert body["pacing"] == {"typing_wpm": 40, "reading_delay_ms": 0}
     assert body["turn_epoch"] == 3  # rest of the body untouched
 
 
-def test_no_pacing_config_omits_the_field():
+def test_no_pacing_config_falls_back_to_plugin_default():
     body = _respond_body("streaming: false\n")
-    assert "pacing" not in body
+    assert body["pacing"] == svc._DEFAULT_PACING == {"typing_wpm": 75}
 
 
-def test_empty_or_garbage_pacing_is_omitted():
-    assert "pacing" not in _respond_body("turn_taking:\n  pacing: {}\n")
-    assert "pacing" not in _respond_body("turn_taking:\n  pacing: fast\n")
+def test_empty_or_garbage_pacing_falls_back_to_default():
+    assert _respond_body("turn_taking:\n  pacing: {}\n")["pacing"] == svc._DEFAULT_PACING
+    assert _respond_body("turn_taking:\n  pacing: fast\n")["pacing"] == svc._DEFAULT_PACING
 
 
 if __name__ == "__main__":
