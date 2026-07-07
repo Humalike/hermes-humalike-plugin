@@ -45,9 +45,9 @@ def _build_system_prompt_for_turn_taking(adapter: Any = None, session_id: Option
         pass
     if session_id:
         try:
-            # Embedded social-learning module (same gateway process, same _CACHE
+            # Embedded social-learning module (same gateway process, same cache
             # the pre_llm_call hook fills) — no cross-plugin import.
-            card = social_learning._CACHE.get(session_id)
+            card = social_learning.get_card(session_id)
             if card:
                 parts.append(card)
         except Exception:

@@ -43,8 +43,32 @@ WINDOW: int = 100
 SERVICE_PATH: str = "/v1/social-learning/actions/extract"
 
 _LOCK: threading.Lock = threading.Lock()
-_CACHE: Dict[str, str] = {}   # session_id -> prompt_block (voice card)
+_CACHE: Dict[str, str] = {}   # card key -> prompt_block (voice card)
 _COUNTER: Dict[str, int] = {}  # session_id -> turn count
+
+# One agent, one voice: by default every session reads/writes a single global
+# card (last refresh wins). Set ``social_learning.per_session_card: true`` in
+# config.yaml to restore per-conversation cards.
+_GLOBAL_KEY: str = "__global__"
+
+
+def _per_session_enabled() -> bool:
+    try:
+        from hermes_cli.config import load_config, cfg_get  # noqa: PLC0415
+
+        return bool(cfg_get(load_config(), "social_learning", "per_session_card", default=False))
+    except Exception:
+        return False
+
+
+def _card_key(session_id: str) -> str:
+    return session_id if _per_session_enabled() else _GLOBAL_KEY
+
+
+def get_card(session_id: str) -> Optional[str]:
+    """Voice card for this session (the global card unless per-session mode)."""
+    with _LOCK:
+        return _CACHE.get(_card_key(session_id))
 
 
 def _cache_file():
@@ -223,7 +247,7 @@ def _refresh_card(session_id: str, conversation_history: Any) -> None:
             prompt_block = data.get("prompt_block")
             if isinstance(prompt_block, str) and prompt_block:
                 with _LOCK:
-                    _CACHE[session_id] = prompt_block
+                    _CACHE[_card_key(session_id)] = prompt_block
                     _save_cache()
                 logger.info(
                     "social-learning: refreshed voice card for session %s (%d chars from %d msgs)",
@@ -298,7 +322,7 @@ def warm_recent_sessions(limit: int = WARM_SESSIONS) -> None:
         for s in sessions:
             session_id = s.get("id")
             with _LOCK:
-                already_cached = session_id in _CACHE
+                already_cached = _card_key(session_id or "") in _CACHE
             if not session_id or already_cached:
                 continue
             history = db.get_messages_as_conversation(session_id)
@@ -320,7 +344,7 @@ def on_pre_llm_call(**kwargs: Any) -> Optional[Dict[str, Any]]:
         with _LOCK:
             _COUNTER[session_id] = _COUNTER.get(session_id, 0) + 1
             n = _COUNTER[session_id]
-            has_card = session_id in _CACHE
+            has_card = _card_key(session_id) in _CACHE
 
         logger.debug(
             "social-learning: turn %d session=%s card=%s (refresh every %d)",
@@ -335,7 +359,7 @@ def on_pre_llm_call(**kwargs: Any) -> Optional[Dict[str, Any]]:
                 )
 
         with _LOCK:
-            card = _CACHE.get(session_id)
+            card = _CACHE.get(_card_key(session_id))
         if card:
             logger.info("social-learning: injecting voice card for session %s (%d chars)", session_id, len(card))
             return {"context": card}

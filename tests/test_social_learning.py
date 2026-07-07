@@ -52,16 +52,30 @@ def test_transcript_lifts_author_and_drops_control_markers():
 
 
 def test_inject_returns_none_without_card():
-    sl._CACHE.pop("sX", None)
+    sl._CACHE.pop(sl._GLOBAL_KEY, None)
     assert sl.on_pre_llm_call(session_id="sX", conversation_history=[]) is None
 
 
 def test_inject_returns_context_with_card():
-    sl._CACHE["sX"] = "# VOICE CARD\nCasing: lowercase"
+    # Default mode: one global card, shared by every session.
+    sl._CACHE[sl._GLOBAL_KEY] = "# VOICE CARD\nCasing: lowercase"
     try:
         assert sl.on_pre_llm_call(session_id="sX") == {"context": "# VOICE CARD\nCasing: lowercase"}
+        assert sl.get_card("some-other-session") == "# VOICE CARD\nCasing: lowercase"
     finally:
-        sl._CACHE.pop("sX", None)
+        sl._CACHE.pop(sl._GLOBAL_KEY, None)
+
+
+def test_per_session_card_opt_in():
+    orig = sl._per_session_enabled
+    sl._per_session_enabled = lambda: True
+    sl._CACHE["sA"] = "card A"
+    try:
+        assert sl.on_pre_llm_call(session_id="sA") == {"context": "card A"}
+        assert sl.on_pre_llm_call(session_id="sB", conversation_history=[]) is None
+    finally:
+        sl._per_session_enabled = orig
+        sl._CACHE.pop("sA", None)
 
 
 def test_no_session_id_is_noop():
@@ -128,6 +142,8 @@ def test_warm_recent_sessions_skips_already_cached():
     sl._CACHE.pop("warm-1", None)
     sl._CACHE["warm-2"] = "already cached — should be skipped"
     calls = []
+    orig_ps = sl._per_session_enabled
+    sl._per_session_enabled = lambda: True  # per-session opt-in: only warm-1 needs a card
     orig_get_url, orig_refresh, orig_thread = sl._get_service_url, sl._refresh_card, threading.Thread
     sl._get_service_url = lambda: "http://example.test"
     sl._refresh_card = lambda session_id, history: calls.append(session_id)
@@ -138,6 +154,7 @@ def test_warm_recent_sessions_skips_already_cached():
         threading.Thread = orig_thread
         sl._get_service_url = orig_get_url
         sl._refresh_card = orig_refresh
+        sl._per_session_enabled = orig_ps
         sl._CACHE.pop("warm-2", None)
         sys.modules.pop("hermes_constants", None)
         sys.modules.pop("hermes_state", None)
