@@ -290,13 +290,9 @@ def register(ctx) -> None:
         native_memory.strip_native_style_capture()
     except Exception as e:
         _log.warning("turn-taking: native-memory style strip skipped: %s", e)
-    if not login.has_working_key():
-        # No usable API key → turn-taking stays a no-op this boot (the login
-        # popped above drives connection; /soul and the social-learning hook,
-        # which self-gate on the key, are already registered). Patches install
-        # on the next boot once a working key is in .env.
-        _log.info("turn-taking: no working API key yet — patches not installed this boot")
-        return
+    # Patches install unconditionally — every service call self-gates on the
+    # key (service.py), so a keyless boot is inert and /connect activates
+    # turn-taking live, no restart needed.
     sent = _patch_send()
     inbound = _patch__enqueue_text_event()
     poll = _patch__poll_messages()
