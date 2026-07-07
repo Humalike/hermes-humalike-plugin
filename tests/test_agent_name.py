@@ -77,10 +77,12 @@ def test_respond_caps_agent_name_to_contract_limit():
     assert len(_respond_body(agent_name="x" * 300)["agent_name"]) == 255
 
 
-def test_agent_name_env_override_and_config_fallback(tmp_path=None):
+def test_agent_name_env_config_then_hardcoded_default(tmp_path=None):
     # core._agent_name reads HERMES_AGENT_NAME first, then agent.name in
-    # ~/.hermes/config.yaml. Exercise both without loading all of core.py's
-    # imports: point its _HERMES_CONFIG at a temp file.
+    # ~/.hermes/config.yaml, then falls back to the hardcoded "Hermes" (the
+    # product name — every un-renamed install gets the fix with zero config).
+    # Exercise all three without loading all of core.py's imports: point its
+    # _HERMES_CONFIG at a temp file.
     import tempfile
 
     core = _load_core()
@@ -89,12 +91,14 @@ def test_agent_name_env_override_and_config_fallback(tmp_path=None):
     os.environ.pop("HERMES_AGENT_NAME", None)
     with tempfile.TemporaryDirectory() as d:
         cfg = Path(d) / "config.yaml"
-        cfg.write_text("agent:\n  name: Hermes\n")
+        cfg.write_text("agent:\n  name: Viktor\n")
         with patch.object(core, "_HERMES_CONFIG", cfg):
-            assert core._agent_name() == "Hermes"
+            assert core._agent_name() == "Viktor"
         cfg.write_text("agent: {}\n")
         with patch.object(core, "_HERMES_CONFIG", cfg):
-            assert core._agent_name() is None
+            assert core._agent_name() == "Hermes"
+    with patch.object(core, "_HERMES_CONFIG", Path("/nonexistent/config.yaml")):
+        assert core._agent_name() == "Hermes"
 
 
 def _load_core():
