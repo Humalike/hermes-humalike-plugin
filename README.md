@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="https://humalike.ai/"><img src="assets/full_logo_huma_w_nobg.png" alt="Humalike" width="50%"></a>
+  <a href="https://humalike.ai/"><img src="assets/wordmark.png" alt="Humalike" width="50%"></a>
 </p>
 
 <p align="center">
@@ -75,6 +75,10 @@ don't set any of them by hand; they're listed here so you know what and why:
 | `streaming` (config.yaml) | `false` | the plugin rewrites the final reply into human-style messages, so Hermes must not also stream its own raw draft over the top |
 | `group_sessions_per_user` (config.yaml) | `false` | everyone in a group shares one conversation, so the bot follows the whole room instead of a separate thread per person |
 | `display.tool_progress` (config.yaml) | `off` | hides "Browsing…/Clicking…" tool chatter so replies read as human |
+| `display.busy_ack_enabled` (config.yaml) | `false` | suppresses the deterministic "⚡ Interrupting current task…" busy acks - a human doesn't announce that |
+| `display.memory_notifications` (config.yaml) | `off` | hides the "💾 Self-improvement review…" background-memory posts - a human doesn't announce memory updates |
+| `display.platforms.telegram.streaming` (config.yaml) | `false` | Telegram's native draft streaming would show the raw draft before naturalization |
+| `agent.disabled_toolsets` (config.yaml) | `+ clarify` | the clarify tool's numbered-option menus are sent by the gateway directly, bypassing naturalization; without it the bot asks in plain text |
 | `slack.reply_in_thread` (config.yaml, only if Slack is connected) | `false` | one shared conversation per channel; the default starts a fresh thread + session for **every** message, so the bot would answer each one separately |
 | `WHATSAPP_*` / `SLACK_*` respond-to-everyone (`.env`, only for a connected platform) | open | reply to everyone in DMs and groups without needing an @mention |
 
