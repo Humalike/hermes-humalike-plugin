@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="https://humalike.ai/"><img src="assets/wordmark.png" alt="Humalike" width="50%"></a>
+  <a href="https://humalike.ai/"><img src="assets/full_logo_huma_w_bbg.jpg" alt="Humalike" width="50%"></a>
 </p>
 
 <p align="center">
