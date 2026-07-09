@@ -56,11 +56,11 @@ def _headers() -> Dict[str, str]:
     return {"Authorization": f"Bearer {_api_key()}", "Content-Type": "application/json"}
 
 
-# The plugin's own pacing default: half the service's stock 150 wpm — the
-# humanlike product wants a slower, more deliberate typist out of the box.
+# The plugin's own pacing default: a bit under the service's stock 150 wpm —
+# the humanlike product wants a slightly more deliberate typist out of the box.
 # Only typing_wpm is pinned; reading delay and the per-message cap stay with
 # the service (it fills every field the request leaves unset).
-_DEFAULT_PACING: Dict[str, Any] = {"typing_wpm": 75}
+_DEFAULT_PACING: Dict[str, Any] = {"typing_wpm": 115}
 
 
 def _pacing() -> Dict[str, Any]:

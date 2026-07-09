@@ -72,7 +72,7 @@ def test_configured_pacing_rides_on_respond():
 
 def test_no_pacing_config_falls_back_to_plugin_default():
     body = _respond_body("streaming: false\n")
-    assert body["pacing"] == svc._DEFAULT_PACING == {"typing_wpm": 75}
+    assert body["pacing"] == svc._DEFAULT_PACING == {"typing_wpm": 115}
 
 
 def test_empty_or_garbage_pacing_falls_back_to_default():
