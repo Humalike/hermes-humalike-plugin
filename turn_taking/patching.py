@@ -215,6 +215,18 @@ async def _handle_inbound(self: Any, event: Any) -> None:
     _log.info("tt inbound: chat=%s sender=%s mid=%s text=%r",
               getattr(source, "chat_id", None), getattr(source, "user_name", None),
               message_id, (getattr(event, "text", "") or "")[:50])
+    # Slash commands (/new, /stop, ...) are gateway commands, not conversation:
+    # gating them lets the model "stay_silent" a /new into oblivion and leaks
+    # command text into the decide transcript. Bypass the gate entirely.
+    if (getattr(event, "text", "") or "").lstrip().startswith("/"):
+        _log.info("tt inbound: chat=%s mid=%s → command bypass (no gate)",
+                  getattr(source, "chat_id", None), message_id)
+        orig = state.ORIG_HANDLE.get(type(self))
+        if orig is not None:
+            await orig(self, event)
+        else:
+            await self.handle_message(event)
+        return
     try:
         await _annotate_mentions(self, event)  # resolve <@id> → @you / @Name for the service
     except Exception as e:
