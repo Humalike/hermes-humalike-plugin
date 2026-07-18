@@ -251,7 +251,9 @@ def _to_messages(events: list) -> list[Dict[str, Any]]:
     """
     out: list[Dict[str, Any]] = []
     for ev in events:
-        content = (getattr(ev, "text", "") or "").strip()
+        # ``_tt_content`` (set by patching._annotate_mentions) has <@id> mentions
+        # resolved to @you / @Name; fall back to the raw text when it's absent.
+        content = (getattr(ev, "_tt_content", None) or getattr(ev, "text", "") or "").strip()
         mtype = getattr(getattr(ev, "message_type", None), "value", "") or ""
         # WhatsApp only emits "text" or a media type (commands arrive as text), so
         # anything else — or any attached media — marks this as a media message.

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import sys
 from typing import Any, Callable
 
@@ -18,6 +19,63 @@ from .core import _inbound_gate, _build_system_prompt_for_turn_taking, _decide, 
 from .service import _to_messages
 
 _log = logging.getLogger(__name__)
+
+_MENTION_RE = re.compile(r"<@([A-Z0-9]+)>")
+
+
+async def _annotate_mentions(adapter: Any, event: Any) -> None:
+    """Make mentions in the inbound text legible to the turn-taking service, so the
+    agent can tell WHO was mentioned and whether it was itself or someone else. The
+    bot's own mention becomes ``@you``; other people keep an identifiable handle.
+    The result is stashed on ``event._tt_content`` (read by ``service._to_messages``)
+    so only the service's view changes, never Hermes's dispatch or history.
+
+    Platform-independent by reusing each adapter's OWN mention machinery, all
+    duck-typed and fail-open (a mention-less message or an adapter missing these
+    hooks is left untouched):
+
+    * Slack — ``<@ID>`` tokens: the bot's ``_bot_user_id`` → ``@you``, others
+      resolved to ``@DisplayName`` via ``_resolve_user_name``.
+    * Telegram/WhatsApp (and any adapter exposing ``_mention_patterns``) — the
+      compiled self-mention patterns ARE "how this bot is addressed", so
+      ``pattern.sub("@you", …)`` marks the bot's own mention; other participants
+      already appear as ``@handle`` / ``@number`` and pass through.
+    """
+    text = getattr(event, "text", "") or ""
+    if not text:
+        return
+    original = text
+    # Slack: <@id> tokens (bot id + async display-name resolver).
+    bot_id = getattr(adapter, "_bot_user_id", None)
+    resolver = getattr(adapter, "_resolve_user_name", None)
+    ids = _MENTION_RE.findall(text)
+    if ids and (bot_id is not None or resolver is not None):
+        chat_id = str(getattr(getattr(event, "source", None), "chat_id", "") or "")
+        for uid in dict.fromkeys(ids):  # unique, order-preserving
+            if bot_id and uid == bot_id:
+                repl = "@you"
+            elif resolver is not None:
+                try:
+                    name = await resolver(uid, chat_id)
+                except Exception as e:
+                    _log.debug("tt: mention resolve failed for %s: %s", uid, e)
+                    continue  # leave this token as-is on lookup failure
+                if not name:
+                    continue  # empty display name → leave the raw token, not a bare "@"
+                repl = "@" + name
+            else:
+                continue
+            text = text.replace(f"<@{uid}>", repl)
+    # Telegram/WhatsApp/…: mark the bot's OWN mention as @you via its self-mention
+    # patterns. Other participants' @handles/@numbers are already legible.
+    for pat in getattr(adapter, "_mention_patterns", None) or []:
+        try:
+            text = pat.sub("@you", text)
+        except Exception as e:
+            _log.debug("tt: mention pattern sub failed: %s", e)
+    if text != original:
+        event._tt_content = text
+
 
 _reply_anchor_patched = False  # idempotency for _patch__reply_anchor_for_event
 _merge_patched = False  # idempotency for _patch_merge_pending_message_event
@@ -157,6 +215,10 @@ async def _handle_inbound(self: Any, event: Any) -> None:
     _log.info("tt inbound: chat=%s sender=%s mid=%s text=%r",
               getattr(source, "chat_id", None), getattr(source, "user_name", None),
               message_id, (getattr(event, "text", "") or "")[:50])
+    try:
+        await _annotate_mentions(self, event)  # resolve <@id> → @you / @Name for the service
+    except Exception as e:
+        _log.debug("tt: mention annotate skipped: %s", e)
     store = getattr(self, "_session_store", None)
     try:
         if store is not None:
