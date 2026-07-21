@@ -103,6 +103,39 @@ def test_noop_without_host_never_raises():
     assert nm.strip_native_style_capture() == (False, False)
 
 
+def test_gated_off_by_default():
+    """Without ``native_memory.strip_style: true`` in config, the public entry
+    is a pure no-op even with a live host present."""
+    nm = _load()
+    schema = _install_tools("Save name, communication style.")
+    _install_agent("Memory guidance. " + _STYLE_EXAMPLE)
+    assert nm._enabled() is False  # no hermes_cli.config here → default off
+    assert nm.strip_native_style_capture() == (False, False)
+    assert "communication style" in schema["description"], "schema untouched"
+    _clear_host()
+
+
+def test_gate_opt_in():
+    nm = _load()
+    cfg = types.ModuleType("hermes_cli.config")
+    cfg.load_config = lambda: {"native_memory": {"strip_style": True}}
+    cfg.cfg_get = lambda c, *path, default=None: (
+        c.get(path[0], {}).get(path[1], default) if len(path) == 2 else default
+    )
+    hermes_cli = types.ModuleType("hermes_cli")
+    hermes_cli.config = cfg
+    sys.modules["hermes_cli"] = hermes_cli
+    sys.modules["hermes_cli.config"] = cfg
+    schema = _install_tools("Save name, communication style.")
+    _install_agent("Memory guidance. " + _STYLE_EXAMPLE)
+    assert nm._enabled() is True
+    assert nm.strip_native_style_capture() == (True, True)
+    assert "communication style" not in schema["description"]
+    sys.modules.pop("hermes_cli", None)
+    sys.modules.pop("hermes_cli.config", None)
+    _clear_host()
+
+
 def test_facts_survive():
     """The point of the plugin: FACT wording is untouched, only STYLE is cut."""
     nm = _load()
@@ -118,5 +151,7 @@ if __name__ == "__main__":
     test_schema_strip_and_idempotent()
     test_guidance_strip_both_modules_and_idempotent()
     test_noop_without_host_never_raises()
+    test_gated_off_by_default()
+    test_gate_opt_in()
     test_facts_survive()
     print("native_memory: all checks passed ✓")
