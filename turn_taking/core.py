@@ -128,9 +128,11 @@ async def _decide(
     """
     tid = await _ensure_thread(session_id, adapter, chat_id)
     if not tid:
+        state.MEMORY_BY_SESSION.pop(session_id, None)  # no stale recall into fail-open replies
         return None
     res = await submit_messages(tid, messages, system_prompt)
     if not res:
+        state.MEMORY_BY_SESSION.pop(session_id, None)
         return None
     decision = res.get("decision")
     epoch = res.get("turn_epoch")
