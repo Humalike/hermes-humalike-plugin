@@ -13,6 +13,8 @@ import types
 from pathlib import Path
 from unittest.mock import patch
 
+import yaml
+
 _ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -113,6 +115,62 @@ def test_platform_problems_whatsapp():
     # Enabled with default policy -> pairing warning.
     with patch.dict(os.environ, {"WHATSAPP_ENABLED": "true"}, clear=True):
         assert any("pairing" in p for p in _MOD._platform_config_problems({}))
+
+
+_CLEAN_CORE_CFG = {
+    "streaming": False,
+    "group_sessions_per_user": False,
+    "display": {
+        "tool_progress": "off",
+        "busy_ack_enabled": False,
+        "memory_notifications": "off",
+        "platforms": {"telegram": {"streaming": False}},
+    },
+    "agent": {"disabled_toolsets": ["clarify"]},
+}
+_CLEAN_ENV = {"TELEGRAM_BOT_TOKEN": "t", "HUMALIKE_API_KEY": "k"}
+
+
+def test_warn_misconfig_core_display_and_agent_checks():
+    """The five autoconfigured 'core' settings _warn_misconfig now verifies:
+    clean cfg -> no problems; each one missing/wrong -> its own message."""
+    with patch.dict(os.environ, _CLEAN_ENV, clear=True):
+        probs = _extract_core_problems(_CLEAN_CORE_CFG)
+    assert probs == [], probs
+
+    with patch.dict(os.environ, _CLEAN_ENV, clear=True):
+        probs = _extract_core_problems({**_CLEAN_CORE_CFG, "display": {}, "agent": {}})
+    assert any("tool_progress" in p for p in probs), probs
+    assert any("busy_ack_enabled" in p for p in probs), probs
+    assert any("memory_notifications" in p for p in probs), probs
+    assert any("platforms.telegram.streaming" in p for p in probs), probs
+    assert any("disabled_toolsets" in p for p in probs), probs
+
+    # A bare YAML `off` (-> False) for memory_notifications still warns: must
+    # be the STRING "off".
+    with patch.dict(os.environ, _CLEAN_ENV, clear=True):
+        cfg = {**_CLEAN_CORE_CFG, "display": {**_CLEAN_CORE_CFG["display"], "memory_notifications": False}}
+        probs = _extract_core_problems(cfg)
+    assert any("memory_notifications" in p for p in probs), probs
+
+    # Telegram streaming only warned when a Telegram bot token is in use.
+    with patch.dict(os.environ, {"HUMALIKE_API_KEY": "k"}, clear=True):
+        cfg = {**_CLEAN_CORE_CFG, "display": {**_CLEAN_CORE_CFG["display"], "platforms": {}}}
+        probs = _extract_core_problems(cfg)
+    assert not any("telegram.streaming" in p for p in probs), probs
+
+
+def _extract_core_problems(cfg):
+    """Run _warn_misconfig with the config-file read and platform/chat-warn
+    side effects stubbed out, capturing the resulting problems list."""
+    captured = []
+    with patch.object(_MOD, "_platform_config_problems", return_value=[]), \
+         patch.object(_MOD, "_should_chat_warn", return_value=False), \
+         patch.object(_MOD.login, "_hermes_home", return_value=Path("/nonexistent")), \
+         patch("pathlib.Path.read_text", return_value=yaml.dump(cfg)), \
+         patch.object(_MOD._log, "warning", side_effect=lambda fmt, p: captured.append(p)):
+        _MOD._warn_misconfig()
+    return captured
 
 
 def test_chat_warn_digest_marker():
