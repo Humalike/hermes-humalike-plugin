@@ -7,13 +7,12 @@ Run directly:  python3 tests/test_misconfig.py
 """
 
 import importlib.util
+import json
 import os
 import sys
 import types
 from pathlib import Path
 from unittest.mock import patch
-
-import yaml
 
 _ROOT = Path(__file__).resolve().parent.parent
 
@@ -134,6 +133,11 @@ _CLEAN_ENV = {"TELEGRAM_BOT_TOKEN": "t", "HUMALIKE_API_KEY": "k"}
 def test_warn_misconfig_core_display_and_agent_checks():
     """The five autoconfigured 'core' settings _warn_misconfig now verifies:
     clean cfg -> no problems; each one missing/wrong -> its own message."""
+    # _warn_misconfig itself parses config with PyYAML; without it the checks
+    # are skipped by design, so there is nothing to exercise here.
+    if importlib.util.find_spec("yaml") is None:
+        print("skip test_warn_misconfig_core_display_and_agent_checks (needs PyYAML)")
+        return
     with patch.dict(os.environ, _CLEAN_ENV, clear=True):
         probs = _extract_core_problems(_CLEAN_CORE_CFG)
     assert probs == [], probs
@@ -184,7 +188,7 @@ def _extract_core_problems(cfg):
     with patch.object(_MOD, "_platform_config_problems", return_value=[]), \
          patch.object(_MOD, "_should_chat_warn", return_value=False), \
          patch.object(_MOD.login, "_hermes_home", return_value=Path("/nonexistent")), \
-         patch("pathlib.Path.read_text", return_value=yaml.dump(cfg)), \
+         patch("pathlib.Path.read_text", return_value=json.dumps(cfg)), \
          patch.object(_MOD._log, "warning", side_effect=lambda fmt, p: captured.append(p)):
         _MOD._warn_misconfig()
     return captured
