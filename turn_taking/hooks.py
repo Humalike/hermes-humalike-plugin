@@ -37,6 +37,36 @@ def _current_message_id() -> str:
     return state.TT_MID_CTX.get("") or ""
 
 
+# Label for the recalled memory wherever it is injected — the reply draft (the
+# pre_llm_call hook, into Hermes's user message) and the respond system_prompt.
+_MEMORY_LABEL = "What you know about the people here (from memory):"
+
+
+def on_pre_llm_call(**kwargs):
+    """pre_llm_call hook: inject the social-memory context recalled at decide into
+    the reply draft, so what the agent knows about these people shapes WHAT it
+    writes. Mirrors the social-learning voice card. Returns None (nothing
+    injected) when the session has no memory — memory off, empty, or an API that
+    does not return ``recalled_context``.
+    """
+    session_id = kwargs.get("session_id") or ""
+    mem = state.MEMORY_BY_SESSION.get(session_id) if session_id else ""
+    if not mem:
+        return None
+    return {"context": f"{_MEMORY_LABEL}\n{mem}"}
+
+
+def _with_memory(system_prompt, session_id):
+    """Fold the turn's recalled memory into the respond system_prompt, so the
+    reply-refinement steps see it too — the same single recall, no second lookup.
+    Unchanged when there is no memory."""
+    mem = state.MEMORY_BY_SESSION.get(session_id) if session_id else ""
+    if not mem:
+        return system_prompt
+    block = f"{_MEMORY_LABEL}\n{mem}"
+    return f"{system_prompt}\n\n{block}" if system_prompt else block
+
+
 def on_transform_llm_output(response_text=None, session_id=None, **kwargs):
     """Fired once per turn with the agent's FINAL answer (after the tool loop).
 
@@ -63,7 +93,7 @@ def on_transform_llm_output(response_text=None, session_id=None, **kwargs):
     # transform_llm_output runs in the agent's worker thread (no running loop here),
     # so hand _respond to the gateway loop captured on inbound. A bare create_task
     # raises "no running event loop" and the naturalize call is silently lost.
-    _coro = _respond(sid, draft, epoch, _build_system_prompt_for_turn_taking(None, sid), meta)
+    _coro = _respond(sid, draft, epoch, _with_memory(_build_system_prompt_for_turn_taking(None, sid), sid), meta)
     try:
         if state.LOOP is not None:
             asyncio.run_coroutine_threadsafe(_coro, state.LOOP)  # bubbles delivered via WS

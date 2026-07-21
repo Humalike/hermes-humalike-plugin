@@ -49,6 +49,13 @@ LAST_CHAT_ID: str = ""
 SESSIONS: Dict[str, str] = {}  # Hermes session_id → turn-taking thread_id
 OPEN_LOCK = asyncio.Lock()     # serializes thread-opens (rare) so a burst can't double-open
 
+# ── Social memory: the context recalled at decide, reused this turn ───────────
+# session_id → recalled_context (what the agent remembers about the people here),
+# returned by submit_messages and reused for BOTH the reply draft (pre_llm_call
+# hook) and the respond system_prompt — one recall per turn, no second lookup.
+# "" when off/empty; overwritten each decide, so it tracks the latest turn.
+MEMORY_BY_SESSION: Dict[str, str] = {}
+
 # ── Decide gate: per-turn epoch ───────────────────────────────────────────────
 # Per-turn epoch keyed by the platform message_id of the message that turn answers.
 # Keying by message_id — not by a single per-session slot — binds each draft
