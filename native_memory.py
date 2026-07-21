@@ -15,6 +15,9 @@ Two edits, both at load time, no hooks:
   2. ``MEMORY_GUIDANCE`` — imported by-name into ``agent.system_prompt`` and
      ``agent.prompt_builder``, so we patch the binding the prompt builder reads.
 
+Opt-in: does nothing unless ``native_memory.strip_style: true`` is set in
+config.yaml — by default native memory is left completely stock.
+
 Best-effort and idempotent; never raises. No-op on a Hermes without these
 internals (the imports simply fail and each edit reports False). The host
 imports are deferred into the functions so importing this module never needs
@@ -29,6 +32,17 @@ import logging
 from typing import Any
 
 _log = logging.getLogger(__name__)
+
+
+def _enabled() -> bool:
+    """Opt-in via ``native_memory.strip_style: true`` in config.yaml. Off by
+    default: native memory is left completely stock unless asked."""
+    try:
+        from hermes_cli.config import load_config, cfg_get  # noqa: PLC0415
+
+        return bool(cfg_get(load_config(), "native_memory", "strip_style", default=False))
+    except Exception:
+        return False
 
 # Explicit prohibition injected into both the tool schema and the guidance.
 # The marker lets us stay idempotent (don't append twice on re-register).
@@ -109,7 +123,10 @@ def _strip_guidance_style() -> bool:
 
 def strip_native_style_capture() -> tuple[bool, bool]:
     """Apply both edits at register time. Returns ``(schema_patched,
-    guidance_patched)`` for logging/tests; never raises."""
+    guidance_patched)`` for logging/tests; never raises. No-op unless
+    ``native_memory.strip_style: true`` is set in config.yaml."""
+    if not _enabled():
+        return False, False
     schema = _strip_schema_style()
     guidance = _strip_guidance_style()
     _log.info(
