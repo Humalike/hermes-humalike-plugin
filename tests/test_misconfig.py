@@ -146,12 +146,29 @@ def test_warn_misconfig_core_display_and_agent_checks():
     assert any("platforms.telegram.streaming" in p for p in probs), probs
     assert any("disabled_toolsets" in p for p in probs), probs
 
-    # A bare YAML `off` (-> False) for memory_notifications still warns: must
-    # be the STRING "off".
+    # Spellings the gateway normalizes to the same behavior are compliant:
+    # bare YAML `off` (-> False), case variants, stringy booleans.
+    lenient = {
+        "tool_progress": False,            # gateway: False -> "off"
+        "busy_ack_enabled": "false",       # gateway: enabled iff str(v)=="true"
+        "memory_notifications": False,     # gateway: bool False -> "off"
+        "platforms": {"telegram": {"streaming": "no"}},  # gateway: str -> bool
+    }
     with patch.dict(os.environ, _CLEAN_ENV, clear=True):
-        cfg = {**_CLEAN_CORE_CFG, "display": {**_CLEAN_CORE_CFG["display"], "memory_notifications": False}}
-        probs = _extract_core_problems(cfg)
-    assert any("memory_notifications" in p for p in probs), probs
+        probs = _extract_core_problems({**_CLEAN_CORE_CFG, "display": lenient})
+    assert probs == [], probs
+
+    # Truthy-normalizing spellings still warn.
+    noisy = {
+        "tool_progress": "all",
+        "busy_ack_enabled": "TRUE",
+        "memory_notifications": "verbose",
+        "platforms": {"telegram": {"streaming": "yes"}},
+    }
+    with patch.dict(os.environ, _CLEAN_ENV, clear=True):
+        probs = _extract_core_problems({**_CLEAN_CORE_CFG, "display": noisy})
+    for key in ("tool_progress", "busy_ack_enabled", "memory_notifications", "telegram.streaming"):
+        assert any(key in p for p in probs), (key, probs)
 
     # Telegram streaming only warned when a Telegram bot token is in use.
     with patch.dict(os.environ, {"HUMALIKE_API_KEY": "k"}, clear=True):

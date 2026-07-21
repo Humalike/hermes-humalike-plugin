@@ -214,23 +214,31 @@ def _warn_misconfig() -> None:
             problems.append("group_sessions_per_user is not false — set "
                             "'group_sessions_per_user: false' (group chats need one shared thread).")
         display = cfg.get("display") if isinstance(cfg.get("display"), dict) else {}
-        if display.get("tool_progress") != "off":
-            problems.append("display.tool_progress is not 'off' — tool-call chatter "
+        # Each check mirrors the gateway's own normalization of YAML quirks
+        # (bare `off`/`no` parse as booleans; strings are lowercased), so we
+        # only warn on configs the gateway would actually misread.
+        tp = display.get("tool_progress")
+        tp = "off" if tp is False else "all" if tp is True else str(tp).lower() if tp is not None else None
+        if tp not in ("off", "log"):  # gateway: chatter posts unless mode ∈ {off, log}
+            problems.append("display.tool_progress is not \"off\" — tool-call chatter "
                             "(Browsing/Clicking…) leaks into replies; set "
-                            "'display.tool_progress: off' in ~/.hermes/config.yaml.")
-        if display.get("busy_ack_enabled") is not False:
+                            "'display.tool_progress: \"off\"' in ~/.hermes/config.yaml.")
+        ack = display.get("busy_ack_enabled")
+        if ack is None or str(ack).lower() == "true":  # gateway: enabled iff str(v) == "true"
             problems.append("display.busy_ack_enabled is not false — deterministic "
                             "'⚡ Interrupting current task…' acks are posted; set "
                             "'display.busy_ack_enabled: false' in ~/.hermes/config.yaml.")
-        if display.get("memory_notifications") != "off":
-            problems.append("display.memory_notifications is not the string 'off' — "
-                            "'💾 Self-improvement review…' memory posts leak (a bare YAML "
-                            "'off' parses as False, which the gateway treats as \"on\"); set "
+        mem = display.get("memory_notifications")
+        if not (mem is False or (isinstance(mem, str) and mem.lower() == "off")):
+            problems.append("display.memory_notifications is not \"off\" — "
+                            "'💾 Self-improvement review…' memory posts leak; set "
                             "'display.memory_notifications: \"off\"' in ~/.hermes/config.yaml.")
         if os.environ.get("TELEGRAM_BOT_TOKEN"):
             platforms = display.get("platforms") if isinstance(display.get("platforms"), dict) else {}
             telegram = platforms.get("telegram") if isinstance(platforms.get("telegram"), dict) else {}
-            if telegram.get("streaming") is not False:
+            stream = telegram.get("streaming")
+            stream = stream.lower() in ("true", "1", "yes", "on") if isinstance(stream, str) else stream
+            if stream is None or bool(stream):  # absent, or normalizes truthy → streams
                 problems.append("display.platforms.telegram.streaming is not false — the raw "
                                 "draft streams before naturalization; set "
                                 "'display.platforms.telegram.streaming: false' in "
