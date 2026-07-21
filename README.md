@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="https://humalike.ai/"><img src="assets/full_logo_huma_w_bbg.jpg" alt="Humalike" width="50%"></a>
+  <a href="https://humalike.ai/"><img src="assets/humalike_x_hermes_banner.png" alt="Humalike × Hermes" width="100%"></a>
 </p>
 
 <p align="center">
@@ -11,9 +11,7 @@
 
 # Humalike Plugin
 
-A [Hermes Agent](https://github.com/NousResearch/hermes-agent) plugin that makes
-your bot feel like a person in the chat, powered by the
-[Humalike](https://docs.humalike.com) APIs:
+One command gives your Hermes agent social intelligence. It decides when to speak, adapts to your group's tone and remembers who said what. Works in group chats on Slack, Telegram and WhatsApp, powered by the [Humalike](https://docs.humalike.com) APIs:
 
 - **[Turn-taking](https://docs.humalike.com/api-reference/turn-taking/overview)** -
   decides when to jump in vs stay silent, and naturalizes replies so they read
