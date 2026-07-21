@@ -10,6 +10,7 @@ import importlib.util
 import sys
 import types
 from pathlib import Path
+from unittest.mock import patch
 
 _ROOT = Path(__file__).resolve().parent.parent
 
@@ -103,36 +104,41 @@ def test_noop_without_host_never_raises():
     assert nm.strip_native_style_capture() == (False, False)
 
 
+def _host_cfg(config):
+    """Fake ``hermes_cli.config`` serving ``config``, as a sys.modules mapping
+    for patch.dict — so the gate never reads the machine's real Hermes install
+    (or its live config.yaml), and state is restored even on assert failure."""
+    cfg = types.ModuleType("hermes_cli.config")
+    cfg.load_config = lambda: config
+    cfg.cfg_get = lambda c, *path, default=None: (
+        c.get(path[0], {}).get(path[1], default) if len(path) == 2 else default
+    )
+    hermes_cli = types.ModuleType("hermes_cli")
+    hermes_cli.config = cfg
+    return {"hermes_cli": hermes_cli, "hermes_cli.config": cfg}
+
+
 def test_gated_off_by_default():
     """Without ``native_memory.strip_style: true`` in config, the public entry
     is a pure no-op even with a live host present."""
     nm = _load()
     schema = _install_tools("Save name, communication style.")
     _install_agent("Memory guidance. " + _STYLE_EXAMPLE)
-    assert nm._enabled() is False  # no hermes_cli.config here → default off
-    assert nm.strip_native_style_capture() == (False, False)
+    with patch.dict(sys.modules, _host_cfg({})):  # host importable, key unset
+        assert nm._enabled() is False
+        assert nm.strip_native_style_capture() == (False, False)
     assert "communication style" in schema["description"], "schema untouched"
     _clear_host()
 
 
 def test_gate_opt_in():
     nm = _load()
-    cfg = types.ModuleType("hermes_cli.config")
-    cfg.load_config = lambda: {"native_memory": {"strip_style": True}}
-    cfg.cfg_get = lambda c, *path, default=None: (
-        c.get(path[0], {}).get(path[1], default) if len(path) == 2 else default
-    )
-    hermes_cli = types.ModuleType("hermes_cli")
-    hermes_cli.config = cfg
-    sys.modules["hermes_cli"] = hermes_cli
-    sys.modules["hermes_cli.config"] = cfg
     schema = _install_tools("Save name, communication style.")
     _install_agent("Memory guidance. " + _STYLE_EXAMPLE)
-    assert nm._enabled() is True
-    assert nm.strip_native_style_capture() == (True, True)
+    with patch.dict(sys.modules, _host_cfg({"native_memory": {"strip_style": True}})):
+        assert nm._enabled() is True
+        assert nm.strip_native_style_capture() == (True, True)
     assert "communication style" not in schema["description"]
-    sys.modules.pop("hermes_cli", None)
-    sys.modules.pop("hermes_cli.config", None)
     _clear_host()
 
 
