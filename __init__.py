@@ -184,6 +184,30 @@ def _warn_misconfig() -> None:
     push stays queued (no inbound path installs), so it arrives — not is lost —
     once the plugin is configured.
     """
+    def gateway_bool(v):
+        """String→bool exactly like the gateway's display_config._normalise:
+        truthy iff lower() ∈ {true, 1, yes, on}; non-strings via bool()."""
+        return v.lower() in ("true", "1", "yes", "on") if isinstance(v, str) else bool(v)
+
+    def chatter_suppressed(v):
+        """display.tool_progress keeps chatter out of chat. Mirrors _normalise
+        (False→"off", True→"all", strings lowercased) + run.py, which posts
+        progress unless the mode is "off" or "log"."""
+        if isinstance(v, bool):
+            v = "off" if not v else "all"
+        return v is not None and str(v).lower() in ("off", "log")
+
+    def memory_posts_off(v):
+        """display.memory_notifications is off. Mirrors the gateway/TUI readers:
+        bool → "on"/"off", other falsy → "on", strings lowercased."""
+        return (not v) if isinstance(v, bool) else (isinstance(v, str) and v.lower() == "off")
+
+    def busy_acks_on(v):
+        """display.busy_ack_enabled posts acks. The gateway bridges str(v)
+        through an env var and enables iff it equals "true" — absent defaults
+        on, and only exact true-spellings enable."""
+        return v is None or str(v).lower() == "true"
+
     problems = []
     if not _config.service_url():
         problems.append("HUMALIKE_API_URL is set empty — turn-taking is explicitly "
@@ -214,22 +238,18 @@ def _warn_misconfig() -> None:
             problems.append("group_sessions_per_user is not false — set "
                             "'group_sessions_per_user: false' (group chats need one shared thread).")
         display = cfg.get("display") if isinstance(cfg.get("display"), dict) else {}
-        # Each check mirrors the gateway's own normalization of YAML quirks
-        # (bare `off`/`no` parse as booleans; strings are lowercased), so we
-        # only warn on configs the gateway would actually misread.
-        tp = display.get("tool_progress")
-        tp = "off" if tp is False else "all" if tp is True else str(tp).lower() if tp is not None else None
-        if tp not in ("off", "log"):  # gateway: chatter posts unless mode ∈ {off, log}
+        # Each check normalizes the value the way the gateway itself does (the
+        # helpers above), so we only warn on configs the gateway would actually
+        # misread — never on a spelling it accepts (bare `off`, "false", "NO").
+        if not chatter_suppressed(display.get("tool_progress")):
             problems.append("display.tool_progress is not \"off\" — tool-call chatter "
                             "(Browsing/Clicking…) leaks into replies; set "
                             "'display.tool_progress: \"off\"' in ~/.hermes/config.yaml.")
-        ack = display.get("busy_ack_enabled")
-        if ack is None or str(ack).lower() == "true":  # gateway: enabled iff str(v) == "true"
+        if busy_acks_on(display.get("busy_ack_enabled")):
             problems.append("display.busy_ack_enabled is not false — deterministic "
                             "'⚡ Interrupting current task…' acks are posted; set "
                             "'display.busy_ack_enabled: false' in ~/.hermes/config.yaml.")
-        mem = display.get("memory_notifications")
-        if not (mem is False or (isinstance(mem, str) and mem.lower() == "off")):
+        if not memory_posts_off(display.get("memory_notifications")):
             problems.append("display.memory_notifications is not \"off\" — "
                             "'💾 Self-improvement review…' memory posts leak; set "
                             "'display.memory_notifications: \"off\"' in ~/.hermes/config.yaml.")
@@ -237,8 +257,7 @@ def _warn_misconfig() -> None:
             platforms = display.get("platforms") if isinstance(display.get("platforms"), dict) else {}
             telegram = platforms.get("telegram") if isinstance(platforms.get("telegram"), dict) else {}
             stream = telegram.get("streaming")
-            stream = stream.lower() in ("true", "1", "yes", "on") if isinstance(stream, str) else stream
-            if stream is None or bool(stream):  # absent, or normalizes truthy → streams
+            if stream is None or gateway_bool(stream):  # absent, or normalizes truthy → streams
                 problems.append("display.platforms.telegram.streaming is not false — the raw "
                                 "draft streams before naturalization; set "
                                 "'display.platforms.telegram.streaming: false' in "
