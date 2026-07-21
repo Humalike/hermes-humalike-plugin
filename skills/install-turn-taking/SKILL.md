@@ -73,7 +73,16 @@ Then merge into `~/.hermes/config.yaml` (create if missing) — all **required**
 streaming: false
 group_sessions_per_user: false
 display:
-  tool_progress: "off"   # hide tool-call chatter (Browsing/Clicking/…) so replies read as human
+  tool_progress: "off"        # hide tool-call chatter (Browsing/Clicking/…) so replies read as human
+  busy_ack_enabled: false     # no deterministic "⚡ Interrupting current task…" acks
+  memory_notifications: "off" # no "💾 Self-improvement review…" posts — MUST be the quoted
+                              # string; bare YAML `off` parses as false and turns back into "on"
+  platforms:
+    telegram:
+      streaming: false        # Telegram draft streaming shows the raw draft before naturalization
+agent:
+  disabled_toolsets: [clarify] # clarify's numbered menus bypass naturalization; without the
+                               # tool the bot asks in plain text
 slack:
   reply_in_thread: false # only if Slack is used — one shared conversation per channel
 

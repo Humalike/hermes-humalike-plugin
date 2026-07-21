@@ -8,8 +8,9 @@ together:
       build), patching (the gateway monkeypatches), hooks (the plugin hooks)
   - ``social_learning/``  the per-conversation voice card (pre_llm_call hook)
   - ``soul/``             the SOUL.md persona feature (the /soul command)
-  - ``native_memory``     strips native memory's *style* capture (the voice card
-                          above owns style) so the two layers don't double-record
+  - ``native_memory``     optionally strips native memory's *style* capture so
+                          the voice card owns style; off unless
+                          ``native_memory.strip_style: true`` in config.yaml
 
 This module only registers the plugin's command, hooks, and patches.
 """
@@ -212,6 +213,35 @@ def _warn_misconfig() -> None:
         if cfg.get("group_sessions_per_user", True):  # Hermes defaults this to true
             problems.append("group_sessions_per_user is not false — set "
                             "'group_sessions_per_user: false' (group chats need one shared thread).")
+        display = cfg.get("display") if isinstance(cfg.get("display"), dict) else {}
+        if display.get("tool_progress") != "off":
+            problems.append("display.tool_progress is not 'off' — tool-call chatter "
+                            "(Browsing/Clicking…) leaks into replies; set "
+                            "'display.tool_progress: off' in ~/.hermes/config.yaml.")
+        if display.get("busy_ack_enabled") is not False:
+            problems.append("display.busy_ack_enabled is not false — deterministic "
+                            "'⚡ Interrupting current task…' acks are posted; set "
+                            "'display.busy_ack_enabled: false' in ~/.hermes/config.yaml.")
+        if display.get("memory_notifications") != "off":
+            problems.append("display.memory_notifications is not the string 'off' — "
+                            "'💾 Self-improvement review…' memory posts leak (a bare YAML "
+                            "'off' parses as False, which the gateway treats as \"on\"); set "
+                            "'display.memory_notifications: \"off\"' in ~/.hermes/config.yaml.")
+        if os.environ.get("TELEGRAM_BOT_TOKEN"):
+            platforms = display.get("platforms") if isinstance(display.get("platforms"), dict) else {}
+            telegram = platforms.get("telegram") if isinstance(platforms.get("telegram"), dict) else {}
+            if telegram.get("streaming") is not False:
+                problems.append("display.platforms.telegram.streaming is not false — the raw "
+                                "draft streams before naturalization; set "
+                                "'display.platforms.telegram.streaming: false' in "
+                                "~/.hermes/config.yaml.")
+        agent = cfg.get("agent") if isinstance(cfg.get("agent"), dict) else {}
+        disabled = agent.get("disabled_toolsets")
+        disabled = disabled if isinstance(disabled, list) else []
+        if "clarify" not in disabled:
+            problems.append("agent.disabled_toolsets does not include 'clarify' — the "
+                            "clarify tool's numbered menus bypass naturalization; add "
+                            "'clarify' to agent.disabled_toolsets in ~/.hermes/config.yaml.")
     problems += _platform_config_problems(cfg)
     for p in problems:
         _log.warning("turn-taking: %s", p)
@@ -283,9 +313,8 @@ def register(ctx) -> None:
         social_learning.warm_recent_sessions()
     except Exception as e:
         _log.warning("turn-taking: social-learning warm-up skipped: %s", e)
-    # Native memory owns durable FACTS; the voice card above owns STYLE. Stop
-    # native memory from also capturing style so the two layers don't
-    # double-record it (and a stale snapshot can't fight the live card).
+    # Off by default; opt in with ``native_memory.strip_style: true`` to stop
+    # native memory from also capturing style (the voice card owns style).
     try:
         native_memory.strip_native_style_capture()
     except Exception as e:
