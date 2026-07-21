@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, Optional
 
@@ -121,9 +122,33 @@ async def _post(path: str, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 
 # ── Actions ───────────────────────────────────────────────────────────────────
+def _memory_bank_id() -> str:
+    """The social-memory bank this agent reads/writes. Stable per-agent (the bot's
+    name) so it remembers people across ALL its channels, not per channel.
+    ``HUMALIKE_MEMORY_BANK_ID`` overrides — e.g. to run several distinct agents,
+    each with its own bank."""
+    override = os.getenv("HUMALIKE_MEMORY_BANK_ID", "").strip()
+    if override:
+        return override
+    # Deferred import: core imports this module, so import at call time to avoid
+    # a cycle. _agent_name() reads config only (no Hermes runtime).
+    from .core import _agent_name
+
+    return _agent_name()
+
+
 async def open_thread(thread_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    """Open/reopen a thread (id = idempotency key). Returns {thread, channel, realtime}."""
-    return await _post(OPEN_THREAD_PATH, {"thread_id": thread_id} if thread_id else {})
+    """Open/reopen a thread (id = idempotency key). Returns {thread, channel, realtime}.
+
+    Enables **social memory** for the thread: the agent remembers what it learns
+    about the people here and gets that context back on each decide
+    (``recalled_context`` on the response). Scoped to ``memory_bank_id`` so one
+    agent shares memory across its channels."""
+    body: Dict[str, Any] = {"thread_id": thread_id} if thread_id else {}
+    bank = _memory_bank_id()
+    if bank:
+        body["integrations"] = {"social_memory": {"memory_bank_id": bank[:255]}}
+    return await _post(OPEN_THREAD_PATH, body)
 
 
 async def submit_messages(

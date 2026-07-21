@@ -22,7 +22,7 @@ import os
 from pathlib import Path
 
 from . import _config, autoconfig, connect, login, native_memory, social_learning, soul
-from .turn_taking.hooks import on_transform_llm_output
+from .turn_taking.hooks import on_pre_llm_call, on_transform_llm_output
 from .turn_taking.patching import (
     _patch__enqueue_text_event,
     _patch_merge_pending_message_event,
@@ -279,6 +279,14 @@ def register(ctx) -> None:
         _log.info("turn-taking: registered social-learning pre_llm_call hook")
     except Exception as e:
         _log.warning("turn-taking: could not register social-learning hook: %s", e)
+    # Social memory: inject what the agent remembers about the people here (the
+    # context recalled at decide) into the reply draft. Multiple pre_llm_call
+    # hooks are supported — both this and the voice card above run.
+    try:
+        ctx.register_hook("pre_llm_call", on_pre_llm_call)
+        _log.info("turn-taking: registered social-memory pre_llm_call hook")
+    except Exception as e:
+        _log.warning("turn-taking: could not register social-memory hook: %s", e)
     try:
         social_learning.warm_recent_sessions()
     except Exception as e:

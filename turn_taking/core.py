@@ -134,6 +134,10 @@ async def _decide(
         return None
     decision = res.get("decision")
     epoch = res.get("turn_epoch")
+    # Reuse this one recall for the reply: the draft (pre_llm_call hook) and the
+    # respond system_prompt both read it. "" when memory is off/empty or the API
+    # returns no recalled_context — then injection simply no-ops.
+    state.MEMORY_BY_SESSION[session_id] = res.get("recalled_context") or ""
     if decision == "speak" and message_id:
         # ponytail: no message_id → can't correlate at respond time, so don't stash;
         # the turn then degrades to a plain (un-naturalized) reply rather than risk a
