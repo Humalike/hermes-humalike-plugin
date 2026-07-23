@@ -83,7 +83,10 @@ def _queued_follow_up(chat: str) -> bool:
         # group/thread variants likewise). Exact-segment match — a substring
         # test would false-positive on numeric ids ("123" ⊂ "…:1234") and skip
         # the re-stamp, silently reintroducing the dropped-reply bug.
-        return any(chat in str(k).split(":") for k in state.PENDING_MAP)
+        # Snapshot first: this runs in the agent worker thread while the gateway
+        # loop mutates the dict; list(dict) is a single GIL-held C call, whereas
+        # iterating the live dict bytecode-by-bytecode can raise RuntimeError.
+        return any(chat in str(k).split(":") for k in list(state.PENDING_MAP))
     except Exception:
         return False
 
