@@ -11,7 +11,7 @@
 
 # Humalike Plugin
 
-One command gives your Hermes agent social intelligence. It decides when to speak, adapts to your group's tone and remembers who said what. Works in group chats on Slack, Telegram and WhatsApp, powered by the [Humalike](https://docs.humalike.com) APIs:
+One command gives your Hermes agent social intelligence. It decides when to speak, adapts to your group's tone and remembers who said what. Works in group chats on Slack, Telegram, WhatsApp and Discord, powered by the [Humalike](https://docs.humalike.com) APIs:
 
 - **[Turn-taking](https://docs.humalike.com/api-reference/turn-taking/overview)** -
   decides when to jump in vs stay silent, and naturalizes replies so they read
@@ -99,6 +99,21 @@ plugin's report ends with that reminder.
   replies to *everyone* who messages that number, in DMs and all groups. If it's
   your personal number, tighten it (the plugin warns about this at setup):
   `WHATSAPP_ALLOW_ALL_USERS=false` and/or `WHATSAPP_GROUP_POLICY=allowlist`.
+- **Discord bot setup** - steps that can't be automated. Create the bot in the
+  [Developer Portal](https://discord.com/developers/applications), enable
+  **Message Content Intent** and **Server Members Intent** (Bot → Privileged
+  Gateway Intents - without the first the bot receives empty messages), invite
+  it with
+  `https://discord.com/oauth2/authorize?client_id=<APP_ID>&scope=bot+applications.commands&permissions=274878286912`,
+  then add to `~/.hermes/.env`:
+  ```bash
+  DISCORD_BOT_TOKEN=...                # from the Developer Portal
+  DISCORD_ALLOWED_USERS=<user-id,...>  # without this the gateway denies everyone
+  DISCORD_REQUIRE_MENTION=false        # let turn-taking see unmentioned channel messages
+  #  (or per-channel: DISCORD_FREE_RESPONSE_CHANNELS=<channel-id,...>)
+  DISCORD_AUTO_THREAD=false            # reply inline; auto-threads would fragment the room
+  DISCORD_REACTIONS=false              # no 👀/✅ ack reactions
+  ```
 
 ### Overrides
 
@@ -123,6 +138,23 @@ replies when it has something to say.
 | WhatsApp | DMs work as-is. Groups: [`skills/configure-whatsapp-group`](skills/configure-whatsapp-group/SKILL.md) |
 | Telegram | DMs work as-is. Groups: [`skills/configure-telegram-group`](skills/configure-telegram-group/SKILL.md) |
 | Slack | DMs/@mentions work as-is. Unmentioned channel messages: [`skills/configure-slack-group`](skills/configure-slack-group/SKILL.md) |
+| Discord | DMs work as-is. Channels: enable both privileged intents, set `DISCORD_ALLOWED_USERS`, and `DISCORD_REQUIRE_MENTION=false` (or `DISCORD_FREE_RESPONSE_CHANNELS=<channel-id,...>`) - see **Discord bot setup** above |
+
+### Discord notes
+
+- **Typing indicator** - Discord's typing is a persistent refresh loop, so the
+  plugin mutes the host's think-time typing and shows typing only while a reply
+  bubble is being paced, with an explicit stop after the last bubble.
+- **Captionless media** - images/files sent without text reach the service as a
+  clean `[image]`/`[media]` marker (with `has_media`), not the host's
+  placeholder sentence, so turn-taking knows media arrived.
+- **Fast message bursts** - a follow-up that arrives while the bot is composing
+  is merged into the in-flight turn and the reply is re-stamped with the newest
+  turn epoch, so quick "hermes" / "are you here?" bursts get an answer instead
+  of a silently superseded one.
+- **Mentions** - `<@id>`/`<@!id>` tokens are resolved for the service: the bot's
+  own mention becomes `@you`, other people become `@DisplayName`.
+- Slash commands (`/new`, `/sethome`, …) bypass the turn-taking gate.
 
 ## Persona: `/soul enhance`
 
