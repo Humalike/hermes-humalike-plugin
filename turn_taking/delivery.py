@@ -73,8 +73,14 @@ async def _forward_typing(thread_id: Optional[str], is_typing: Optional[bool]) -
     try:
         if is_typing:
             # On adapters whose host typing is muted (Discord), call the genuine
-            # send_typing — the patched one is a no-op.
-            orig = state.ORIG_SEND_TYPING.get(type(adapter))
+            # send_typing — the patched one is a no-op. Walk the MRO: the mute is
+            # registered under the resolved base class, but the live adapter may
+            # be a subclass (plain type() lookup would miss and hit the no-op).
+            orig = next(
+                (state.ORIG_SEND_TYPING[c] for c in type(adapter).__mro__
+                 if c in state.ORIG_SEND_TYPING),
+                None,
+            )
             if orig is not None:
                 await orig(adapter, chat_id)
             else:

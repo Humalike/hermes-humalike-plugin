@@ -142,11 +142,17 @@ async def _decide(
         if delivery_meta:
             state.META_BY_MESSAGE_ID[message_id] = delivery_meta
     if epoch is not None:
+        # Unconditional (also on stay_silent): every submit bumps the service's
+        # epoch, so this mirrors the server's CURRENT epoch — exactly what a
+        # merged turn's respond must claim, regardless of the decision that
+        # accompanied the newest message.
         state.LATEST_EPOCH_BY_CHAT[str(chat_id)] = epoch
     # ponytail: size-cap the per-message maps (entries for merged-away messages
-    # are never popped); FIFO eviction is fine at this scale.
+    # are never popped). FIFO eviction is blind to liveness — a still-running
+    # turn's entry could be evicted — so the cap is set far above any plausible
+    # number of decides during one turn (minutes-long tool turns included).
     for _m in (state.EPOCH_BY_MESSAGE_ID, state.META_BY_MESSAGE_ID, state.LATEST_EPOCH_BY_CHAT):
-        while len(_m) > 512:
+        while len(_m) > 4096:
             _m.pop(next(iter(_m)))
     _log.info("tt decide: session=%s chat=%s mid=%s decision=%s epoch=%s",
               session_id, chat_id, message_id, decision, epoch)
