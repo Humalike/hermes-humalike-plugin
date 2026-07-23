@@ -57,20 +57,32 @@ async def _forward(
 
 
 async def _forward_typing(thread_id: Optional[str], is_typing: Optional[bool]) -> None:
-    """on_typing callback: show "… is typing" on WhatsApp while the reply is paced.
+    """on_typing callback: show "… is typing" while the reply is paced.
 
-    Easy version: fire a one-shot indicator on typing-start. WhatsApp presence
-    auto-expires after a few seconds, so a long paced reply may stop showing it
-    mid-way; refresh-on-a-timer is a later polish if that matters.
+    WhatsApp/Telegram presence auto-expires after a few seconds, so typing-start
+    alone was enough there. Discord's ``send_typing`` instead starts a persistent
+    refresh loop that runs until ``stop_typing`` — without an explicit stop the
+    indicator loops forever after the bubbles land. So: start on typing-start,
+    and on typing-stop call the adapter's ``stop_typing`` when it has one
+    (harmless no-op elsewhere).
     """
-    if not is_typing:
-        return  # presence auto-expires; no explicit stop needed
     route = state.ROUTES.get(thread_id or "")
     if route is None:
         return
     adapter, chat_id = route
     try:
-        await adapter.send_typing(chat_id)
+        if is_typing:
+            # On adapters whose host typing is muted (Discord), call the genuine
+            # send_typing — the patched one is a no-op.
+            orig = state.ORIG_SEND_TYPING.get(type(adapter))
+            if orig is not None:
+                await orig(adapter, chat_id)
+            else:
+                await adapter.send_typing(chat_id)
+        else:
+            stop = getattr(adapter, "stop_typing", None)
+            if stop is not None:
+                await stop(chat_id)
     except Exception as e:
         _log.warning("turn-taking typing failed: %s", e)
 
