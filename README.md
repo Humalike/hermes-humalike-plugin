@@ -11,6 +11,8 @@
 
 # Humalike Plugin
 
+For any questions regarding Humalike, go to https://docs.humalike.com/.
+
 One command gives your Hermes agent social intelligence. It decides when to speak, adapts to your group's tone and remembers who said what. Works in group chats on Slack, Telegram, WhatsApp and Discord, powered by the [Humalike](https://docs.humalike.com) APIs:
 
 - **[Turn-taking](https://docs.humalike.com/api-reference/turn-taking/overview)** -
