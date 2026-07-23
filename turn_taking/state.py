@@ -35,6 +35,21 @@ ORIG_SEND: Dict[type, Callable] = {}
 # falls back to the adapter's own (unpatched) handle_message.
 ORIG_HANDLE: Dict[type, Callable] = {}
 
+# Genuine send_typing per adapter class whose host typing is muted (Discord):
+# the host's think-time indicator is suppressed; delivery's paced typing calls
+# the original through here.
+ORIG_SEND_TYPING: Dict[type, Callable] = {}
+
+# Latest speak-epoch the service assigned per chat (written at decide). Lets the
+# transform hook stamp a merged turn's respond with the epoch of the newest
+# message it absorbed, instead of the one bound at turn start.
+LATEST_EPOCH_BY_CHAT: Dict[str, int] = {}
+
+# Live reference to the gateway's pending_messages map (captured by the
+# merge_pending_message_event wrapper). A pending entry for a chat means a
+# QUEUED follow-up turn exists — its answer owns the newest epoch, ours doesn't.
+PENDING_MAP: Optional[Dict] = None
+
 # The most recent adapter instance seen by the inbound gate. Fallback for
 # notify.py when ROUTES is empty (service dead from startup → no thread was
 # ever opened, but an alert still needs a live adapter to reach the gateway).

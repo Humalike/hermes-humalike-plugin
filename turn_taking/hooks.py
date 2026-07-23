@@ -37,6 +37,22 @@ def _current_message_id() -> str:
     return state.TT_MID_CTX.get("") or ""
 
 
+def _queued_follow_up(chat: str) -> bool:
+    """True when the gateway holds a QUEUED follow-up event for this chat.
+
+    ``state.PENDING_MAP`` is the live ``pending_messages`` dict (captured by the
+    merge wrapper); its keys are session keys that embed the chat id. No map yet
+    (nothing was ever queued) → no follow-up. Fail-open to False: worst case we
+    stamp the newest epoch and the service arbitrates via its one-shot claim.
+    """
+    if not chat or not state.PENDING_MAP:
+        return False
+    try:
+        return any(chat in str(k) for k in state.PENDING_MAP)
+    except Exception:
+        return False
+
+
 def on_transform_llm_output(response_text=None, session_id=None, **kwargs):
     """Fired once per turn with the agent's FINAL answer (after the tool loop).
 
@@ -56,6 +72,22 @@ def on_transform_llm_output(response_text=None, session_id=None, **kwargs):
     if not draft or epoch is None:
         return None  # not a turn-taking speak turn → leave Hermes alone
     chat = _chat_for_session(sid)
+    # A follow-up that arrived mid-turn gets merged into THIS turn's context, but
+    # the epoch above was bound at turn start — the service would drop the reply
+    # as superseded even though it answers the newest message. Stamp with the
+    # chat's latest epoch instead, unless a QUEUED follow-up turn exists (then
+    # the newest epoch belongs to its answer, not ours).
+    # ponytail: this is decidedly hacky — we infer "merged vs queued" by peeking
+    # at a live ref to the gateway's private pending_messages dict (PENDING_MAP)
+    # and correct the epoch after the fact, instead of the turn knowing what it
+    # actually consumed. Works, but rests on host internals. Worth a refactor
+    # someday: either the service accepts respond(claim_latest=true) and
+    # arbitrates atomically, or Hermes exposes "messages consumed by this turn"
+    # so the anchor/epoch can be bound correctly at the source.
+    latest = state.LATEST_EPOCH_BY_CHAT.get(chat or "")
+    if latest is not None and latest != epoch and not _queued_follow_up(chat):
+        _log.info("tt transform: epoch %s → %s (follow-up merged into this turn)", epoch, latest)
+        epoch = latest
     if chat:
         _suppress_answer(chat, draft)  # drop the send whose content matches this answer
     _log.info("tt transform: session=%s chat=%s mid=%s epoch=%s → naturalize + suppress raw send | %r",
