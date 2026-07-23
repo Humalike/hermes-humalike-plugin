@@ -280,14 +280,18 @@ def _to_messages(events: list) -> list[Dict[str, Any]]:
         # resolved to @you / @Name; fall back to the raw text when it's absent.
         content = (getattr(ev, "_tt_content", None) or getattr(ev, "text", "") or "").strip()
         mtype = getattr(getattr(ev, "message_type", None), "value", "") or ""
-        # Discord fills captionless media with a host placeholder sentence instead
-        # of empty text; treat it as empty so the [image]/[media] branch applies
-        # and the service transcript isn't polluted with a meta-note.
-        if content == "(The user sent a message with no text content)":
-            content = ""
         # WhatsApp only emits "text" or a media type (commands arrive as text), so
         # anything else — or any attached media — marks this as a media message.
         has_media = bool(getattr(ev, "media_urls", None)) or mtype not in ("", "text", "command")
+        # Discord fills captionless media with a host placeholder sentence instead
+        # of empty text; treat it as empty so the [image]/[media] branch applies
+        # and the service transcript isn't polluted with a meta-note. Gated on
+        # has_media so a user who literally types this sentence keeps their text.
+        # The literal is hardcoded (not localized) in THREE host sites — keep in
+        # sync: plugins/platforms/discord/adapter.py:7555, gateway/run.py:16972,
+        # gateway/run.py:17017.
+        if has_media and content == "(The user sent a message with no text content)":
+            content = ""
         if not content:
             if not has_media:
                 continue
