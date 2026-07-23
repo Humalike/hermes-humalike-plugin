@@ -42,7 +42,8 @@ def _load():
     tt.hooks = _stub("turn_taking.hooks", on_transform_llm_output=noop)
     tt.patching = _stub("turn_taking.patching", **{n: (lambda: False) for n in (
         "_patch__enqueue_text_event", "_patch_merge_pending_message_event",
-        "_patch__poll_messages", "_patch_send", "_patch_slack_handle_message",
+        "_patch__poll_messages", "_patch_send", "_patch_discord_handle_message", "_patch_discord_send_typing",
+        "_patch_slack_handle_message",
         "_patch_telegram_handle_message", "_patch_telegram_observe_group")})
     tt.notify = _stub("turn_taking.notify", queue_startup=noop)
     tt.service = _stub("turn_taking.service", _service_url=lambda: "")

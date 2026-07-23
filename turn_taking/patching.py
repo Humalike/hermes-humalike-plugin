@@ -45,6 +45,21 @@ async def _annotate_mentions(adapter: Any, event: Any) -> None:
     if not text:
         return
     original = text
+    # Discord: resolve <@id>/<@!id> via the message's own resolved mentions —
+    # the adapter has no _bot_user_id/_resolve_user_name/_mention_patterns
+    # surface, but discord.py hands us every mentioned Member on the raw message.
+    d_mentions = getattr(getattr(event, "raw_message", None), "mentions", None)
+    d_self = getattr(getattr(adapter, "_client", None), "user", None)
+    if d_mentions:
+        for m in d_mentions:
+            try:
+                if d_self is not None and m.id == d_self.id:
+                    repl = "@you"
+                else:
+                    repl = "@" + (getattr(m, "display_name", None) or getattr(m, "name", "") or str(m.id))
+                text = text.replace(f"<@{m.id}>", repl).replace(f"<@!{m.id}>", repl)
+            except Exception as e:
+                _log.debug("tt: discord mention resolve failed: %s", e)
     # Slack: <@id> tokens (bot id + async display-name resolver).
     bot_id = getattr(adapter, "_bot_user_id", None)
     resolver = getattr(adapter, "_resolve_user_name", None)
@@ -75,6 +90,7 @@ async def _annotate_mentions(adapter: Any, event: Any) -> None:
             _log.debug("tt: mention pattern sub failed: %s", e)
     if text != original:
         event._tt_content = text
+        _log.info("tt mentions: %r → %r", original[:80], text[:80])
 
 
 _reply_anchor_patched = False  # idempotency for _patch__reply_anchor_for_event
@@ -123,6 +139,7 @@ def _platform_adapter_classes() -> list:
         ("whatsapp", "WhatsAppAdapter"),
         ("telegram", "TelegramAdapter"),
         ("slack", "SlackAdapter"),
+        ("discord", "DiscordAdapter"),
     ):
         try:
             classes.append(_real_adapter_class(platform, class_name))
@@ -402,6 +419,65 @@ def _patch_slack_handle_message() -> bool:
     return True
 
 
+# ── Discord gate: route handle_message through the turn-taking gate ───────────
+def _patch_discord_handle_message() -> bool:
+    """Gate Discord events that bypass the text queue, mirroring Telegram's patch.
+
+    Discord's ``_handle_message`` sends only live plain text (with batching
+    enabled) through ``_enqueue_text_event`` (the gate); media/attachments,
+    recovered historical messages, and ALL text when ``text_batch_delay_seconds``
+    is 0 dispatch straight to ``handle_message``. Wrapping it routes those through
+    ``_handle_inbound``; the genuine handler is kept in ``state.ORIG_HANDLE`` so a
+    "speak" turn dispatches via it instead of recursing. Idempotent.
+    """
+    try:
+        DiscordAdapter = _real_adapter_class("discord", "DiscordAdapter")
+    except Exception as e:
+        _log.warning("turn-taking: cannot patch Discord gate (no DiscordAdapter): %s", e)
+        return False
+    if getattr(DiscordAdapter.handle_message, "_tt_patched", False):
+        return False
+    _orig = DiscordAdapter.handle_message  # inherited from base; genuine handler
+    state.ORIG_HANDLE[DiscordAdapter] = _orig
+
+    async def handle_message(self, event):
+        await _handle_inbound(self, event)
+
+    handle_message._tt_patched = True  # type: ignore[attr-defined]
+    DiscordAdapter.handle_message = handle_message
+    return True
+
+
+# ── Discord host-typing mute: typing only during paced delivery ───────────────
+def _patch_discord_send_typing() -> bool:
+    """Mute the HOST's typing indicator on Discord; delivery keeps the real one.
+
+    The gateway starts ``send_typing`` when a turn dispatches and Discord's
+    implementation is a persistent 12s refresh loop — so the bot shows
+    "typing…" for the whole think time (a 2-minute tool-using turn = 2 minutes
+    of typing). Humalike's model is typing only while a bubble is being
+    "typed" (service-paced). Replace ``send_typing`` with a no-op and stash the
+    genuine one in ``state.ORIG_SEND_TYPING`` for delivery._forward_typing.
+    ``stop_typing`` stays genuine (stopping a never-started loop is a no-op).
+    Idempotent.
+    """
+    try:
+        DiscordAdapter = _real_adapter_class("discord", "DiscordAdapter")
+    except Exception as e:
+        _log.warning("turn-taking: cannot mute Discord host typing (no DiscordAdapter): %s", e)
+        return False
+    if getattr(DiscordAdapter.send_typing, "_tt_patched", False):
+        return False
+    state.ORIG_SEND_TYPING[DiscordAdapter] = DiscordAdapter.send_typing
+
+    async def send_typing(self, chat_id, metadata=None):
+        return None  # host think-time typing muted; delivery uses the original
+
+    send_typing._tt_patched = True  # type: ignore[attr-defined]
+    DiscordAdapter.send_typing = send_typing
+    return True
+
+
 # ── Group observation gate: let turn-taking jump into unmentioned chatter ──────
 async def _handle_observed_group(self: Any, event: Any, replay: Callable[[], Any]) -> None:
     """Gate one unmentioned group message: dispatch on an explicit "speak",
@@ -574,6 +650,7 @@ def _patch_merge_pending_message_event() -> bool:
         return False
 
     def _merge(pending_messages, session_key, event, *, merge_text=False):
+        state.PENDING_MAP = pending_messages  # live ref for hooks._queued_follow_up
         existing = pending_messages.get(session_key)
         orig(pending_messages, session_key, event, merge_text=merge_text)
         # A text follow-up merged INTO the existing pending turn (same object kept,
