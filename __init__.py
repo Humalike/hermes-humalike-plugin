@@ -29,6 +29,8 @@ from .turn_taking.patching import (
     _patch_merge_pending_message_event,
     _patch__poll_messages,
     _patch_send,
+    _patch_discord_handle_message,
+    _patch_discord_send_typing,
     _patch_slack_handle_message,
     _patch_telegram_handle_message,
     _patch_telegram_observe_group,
@@ -363,6 +365,8 @@ def register(ctx) -> None:
     tg_media = _patch_telegram_handle_message()
     tg_group = _patch_telegram_observe_group()
     slack = _patch_slack_handle_message()
+    discord = _patch_discord_handle_message()
+    discord_typing = _patch_discord_send_typing()
     merge_fix = _patch_merge_pending_message_event()
     hooked = False
     try:
@@ -370,5 +374,5 @@ def register(ctx) -> None:
         hooked = True
     except Exception as e:
         _log.warning("turn-taking: could not register transform_llm_output hook: %s", e)
-    _log.info("turn-taking registered (send=%s, inbound=%s, poll=%s, tg_media=%s, tg_group=%s, slack=%s, merge_fix=%s, transform=%s)",
-              sent, inbound, poll, tg_media, tg_group, slack, merge_fix, hooked)
+    _log.info("turn-taking registered (send=%s, inbound=%s, poll=%s, tg_media=%s, tg_group=%s, slack=%s, discord=%s, discord_typing=%s, merge_fix=%s, transform=%s)",
+              sent, inbound, poll, tg_media, tg_group, slack, discord, discord_typing, merge_fix, hooked)
