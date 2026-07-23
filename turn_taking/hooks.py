@@ -78,7 +78,12 @@ def _queued_follow_up(chat: str) -> bool:
     if not chat or not state.PENDING_MAP:
         return False
     try:
-        return any(chat in str(k) for k in state.PENDING_MAP)
+        # Session keys embed the chat id as a ':'-separated segment
+        # (gateway/session.py build_session_key: "{ns}:{platform}:dm:{chat_id}",
+        # group/thread variants likewise). Exact-segment match — a substring
+        # test would false-positive on numeric ids ("123" ⊂ "…:1234") and skip
+        # the re-stamp, silently reintroducing the dropped-reply bug.
+        return any(chat in str(k).split(":") for k in state.PENDING_MAP)
     except Exception:
         return False
 

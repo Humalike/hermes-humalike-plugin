@@ -102,6 +102,13 @@ def test_discord_host_placeholder_treated_as_captionless_media():
     assert out == [{"sender": "alice", "content": "[image]", "has_media": True}]
 
 
+def test_host_placeholder_without_media_is_kept_as_text():
+    # A user literally typing the host's placeholder sentence (no media attached)
+    # must keep their text — the blanking is gated on has_media.
+    out = tt._to_messages([_event(text="(The user sent a message with no text content)")])
+    assert out == [{"sender": "alice", "content": "(The user sent a message with no text content)"}]
+
+
 def test_text_message_has_no_media_key():
     assert "has_media" not in tt._to_messages([_event(text="hi")])[0]
 
