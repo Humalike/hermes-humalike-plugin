@@ -276,7 +276,12 @@ def _patch__enqueue_text_event() -> bool:
     """Replace each adapter's ``_enqueue_text_event``: gate each message instead
     of Hermes's merge-debounce. Patches every importable adapter class (the gate is
     platform-agnostic — it duck-types the event). Idempotent. Returns True if any
-    class was patched."""
+    class was patched.
+
+    Note: on Discord this also bypasses the host's client-side split-message
+    batching (a >2000-char message Discord split into chunks arrives as separate
+    gated turns instead of one merged text) — consistent with the plugin's
+    gate-each-message model, and rare for real users."""
     patched_any = False
     for cls in _platform_adapter_classes():
         orig = getattr(cls, "_enqueue_text_event", None)
