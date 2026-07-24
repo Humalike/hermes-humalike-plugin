@@ -36,12 +36,12 @@ def _hermes_home() -> Path:
     turn_taking.service on purpose: this module stays import-free of the plugin."""
     try:
         from hermes_constants import get_hermes_home_override
+    except ImportError:
+        return _HERMES_HOME
 
-        override = get_hermes_home_override()
-        if override:
-            return Path(override)
-    except Exception:
-        pass
+    override = get_hermes_home_override()
+    if override:
+        return Path(override)
     return _HERMES_HOME
 
 
