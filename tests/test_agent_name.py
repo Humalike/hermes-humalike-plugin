@@ -82,7 +82,7 @@ def test_agent_name_env_config_then_hardcoded_default(tmp_path=None):
     # ~/.hermes/config.yaml, then falls back to the hardcoded "Hermes" (the
     # product name — every un-renamed install gets the fix with zero config).
     # Exercise all three without loading all of core.py's imports: point its
-    # _HERMES_CONFIG at a temp file.
+    # _hermes_config() at a temp file.
     import tempfile
 
     core = _load_core()
@@ -92,12 +92,12 @@ def test_agent_name_env_config_then_hardcoded_default(tmp_path=None):
     with tempfile.TemporaryDirectory() as d:
         cfg = Path(d) / "config.yaml"
         cfg.write_text("agent:\n  name: Viktor\n")
-        with patch.object(core, "_HERMES_CONFIG", cfg):
+        with patch.object(core, "_hermes_config", lambda: cfg):
             assert core._agent_name() == "Viktor"
         cfg.write_text("agent: {}\n")
-        with patch.object(core, "_HERMES_CONFIG", cfg):
+        with patch.object(core, "_hermes_config", lambda: cfg):
             assert core._agent_name() == "Hermes"
-    with patch.object(core, "_HERMES_CONFIG", Path("/nonexistent/config.yaml")):
+    with patch.object(core, "_hermes_config", lambda: Path("/nonexistent/config.yaml")):
         assert core._agent_name() == "Hermes"
 
 
