@@ -25,8 +25,35 @@ import httpx
 
 _log = logging.getLogger(__name__)
 
-_HERMES_CONFIG = Path.home() / ".hermes" / "config.yaml"
-_AUTO_MARKER = _HERMES_CONFIG.with_name(".soul_auto_enhanced")  # one-shot guard
+# HERMES_HOME-aware fallback, kept as a module attr so tests can repoint it.
+_HERMES_HOME = Path(os.getenv("HERMES_HOME") or Path.home() / ".hermes")
+
+
+def _hermes_home() -> Path:
+    """The ACTIVE hermes home — the context-local profile override when profile
+    routing has one in scope (per-turn, e.g. /soul enhance runs inside the
+    gateway's _profile_runtime_scope), else the process default. Duplicated from
+    turn_taking.service on purpose: this module stays import-free of the plugin."""
+    try:
+        from hermes_constants import get_hermes_home_override
+
+        override = get_hermes_home_override()
+        if override:
+            return Path(override)
+    except Exception:
+        pass
+    return _HERMES_HOME
+
+
+def _hermes_config() -> Path:
+    return _hermes_home() / "config.yaml"
+
+
+def _auto_marker() -> Path:
+    return _hermes_home() / ".soul_auto_enhanced"  # one-shot guard, per profile
+
+
+
 ENHANCE_PATH = "/v1/personas/actions/enhance"
 ENHANCEMENT_REPO = "/v1/personas/repositories/Enhancement/by-id/{}"
 DEFAULT_API = "https://api.humalike.com"
@@ -43,7 +70,7 @@ def _cfg() -> Dict[str, Any]:
     try:
         import yaml
 
-        cfg = yaml.safe_load(_HERMES_CONFIG.read_text()) or {}
+        cfg = yaml.safe_load(_hermes_config().read_text()) or {}
         return cfg.get("turn_taking") or {}
     except Exception:
         return {}
@@ -64,7 +91,7 @@ def _soul_path() -> Path:
     plugin's _build_system_prompt_for_turn_taking() actually reads at runtime). Override via env or
     ``turn_taking.soul_path`` in config.yaml (e.g. point it at docker/SOUL.md)."""
     p = os.getenv("HERMES_SOUL_PATH") or str(_cfg().get("soul_path") or "")
-    return Path(p).expanduser() if p else _HERMES_CONFIG.with_name("SOUL.md")
+    return Path(p).expanduser() if p else _hermes_home() / "SOUL.md"
 
 
 # ── SOUL.md parsing ───────────────────────────────────────────────────────────
@@ -223,13 +250,20 @@ def maybe_auto_enhance() -> None:
     """Fire the one-shot auto-enhance on first startup, in a background thread so it
     never blocks gateway boot (enhance polls for minutes). Marker-guarded and a no-op
     once done. ponytail: delete ~/.hermes/.soul_auto_enhanced to force a re-run."""
-    if not _auto_enabled() or _AUTO_MARKER.exists():
+    if not _auto_enabled() or _auto_marker().exists():
         return
+
+    # Snapshot the context NOW: the background thread outlives any context-local
+    # profile scope, so home-dependent paths (SOUL.md, the marker) must resolve
+    # under the scope that scheduled us, not the thread's empty context.
+    import contextvars
+
+    ctx = contextvars.copy_context()
 
     def _run() -> None:
         try:
-            if asyncio.run(_auto_enhance()):
-                _AUTO_MARKER.write_text("")  # succeeded → never auto-run again
+            if ctx.run(asyncio.run, _auto_enhance()):
+                ctx.run(_auto_marker).write_text("")  # succeeded → never auto-run again
         except Exception as e:
             _log.warning("soul: auto-enhance thread errored: %s", e)
 
