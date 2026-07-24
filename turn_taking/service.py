@@ -149,7 +149,7 @@ def _memory_bank_id() -> str:
     name) so it remembers people across ALL its channels, not per channel.
     ``HUMALIKE_MEMORY_BANK_ID`` overrides — e.g. to run several distinct agents,
     each with its own bank."""
-    override = os.getenv("HUMALIKE_MEMORY_BANK_ID", "").strip()
+    override = _config._getenv("HUMALIKE_MEMORY_BANK_ID").strip()
     if override:
         return override
     # Deferred import: core imports this module, so import at call time to avoid

@@ -76,14 +76,26 @@ def _cfg() -> Dict[str, Any]:
         return {}
 
 
+def _getenv(name: str, default: str = "") -> str:
+    """Env var, honoring Hermes's per-profile secret scope (mirrors _config._getenv;
+    duplicated because this module stays import-free of the plugin)."""
+    try:
+        from agent.secret_scope import get_secret
+
+        val = get_secret(name, default)
+        return val if val is not None else default
+    except Exception:
+        return os.getenv(name, default)
+
+
 def _api_url() -> str:
-    url = os.getenv("HUMALIKE_API_URL") or DEFAULT_API
+    url = _getenv("HUMALIKE_API_URL") or DEFAULT_API
     return url.rstrip("/")
 
 
 def _api_key() -> str:
     # Same key as the turn-taking service unless a personas-specific one is set.
-    return os.getenv("HUMALIKE_API_KEY") or os.getenv("TURN_TAKING_API_KEY", "")
+    return _getenv("HUMALIKE_API_KEY") or _getenv("TURN_TAKING_API_KEY")
 
 
 def _soul_path() -> Path:
