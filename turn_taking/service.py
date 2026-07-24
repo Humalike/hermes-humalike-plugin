@@ -50,12 +50,12 @@ def _hermes_config() -> Path:
     """
     try:
         from hermes_constants import get_hermes_home_override
+    except ImportError:
+        return _HERMES_CONFIG
 
-        override = get_hermes_home_override()
-        if override:
-            return Path(override) / "config.yaml"
-    except Exception:
-        pass
+    override = get_hermes_home_override()
+    if override:
+        return Path(override) / "config.yaml"
     return _HERMES_CONFIG
 
 
