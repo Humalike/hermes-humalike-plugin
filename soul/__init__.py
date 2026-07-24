@@ -78,14 +78,17 @@ def _cfg() -> Dict[str, Any]:
 
 def _getenv(name: str, default: str = "") -> str:
     """Env var, honoring Hermes's per-profile secret scope (mirrors _config._getenv;
-    duplicated because this module stays import-free of the plugin)."""
+    duplicated because this module stays import-free of the plugin). Unscoped
+    lookup under multiplexing → default, never os.environ (fail closed)."""
     try:
-        from agent.secret_scope import get_secret
-
-        val = get_secret(name, default)
-        return val if val is not None else default
-    except Exception:
+        from agent.secret_scope import UnscopedSecretError, get_secret
+    except ImportError:
         return os.getenv(name, default)
+    try:
+        val = get_secret(name, default)
+    except UnscopedSecretError:
+        return default
+    return val if val is not None else default
 
 
 def _api_url() -> str:
