@@ -15,7 +15,7 @@ from typing import Any, Dict, Optional
 from . import state
 from .. import social_learning
 from .delivery import _ensure_thread
-from .service import _HERMES_CONFIG, _to_messages, respond, submit_messages
+from .service import _hermes_config, _to_messages, respond, submit_messages
 
 _log = logging.getLogger(__name__)
 
@@ -38,7 +38,7 @@ def _build_system_prompt_for_turn_taking(adapter: Any = None, session_id: Option
     # silently skipped if it moves.
     parts: list[str] = []
     try:
-        soul = _HERMES_CONFIG.with_name("SOUL.md").read_text().strip()
+        soul = _hermes_config().with_name("SOUL.md").read_text().strip()
         if soul:
             parts.append(soul)
     except Exception:
@@ -67,7 +67,7 @@ def _build_system_prompt_for_turn_taking(adapter: Any = None, session_id: Option
     try:
         import yaml
 
-        cfg = yaml.safe_load(_HERMES_CONFIG.read_text()) or {}
+        cfg = yaml.safe_load(_hermes_config().read_text()) or {}
         return str((cfg.get("agent") or {}).get("system_prompt", "")).strip() or None
     except Exception:
         return None
@@ -91,7 +91,7 @@ def _agent_name() -> str:
     try:
         import yaml
 
-        cfg = yaml.safe_load(_HERMES_CONFIG.read_text()) or {}
+        cfg = yaml.safe_load(_hermes_config().read_text()) or {}
         return str((cfg.get("agent") or {}).get("name", "")).strip() or DEFAULT_AGENT_NAME
     except Exception:
         return DEFAULT_AGENT_NAME

@@ -33,8 +33,30 @@ RESPOND_PATH = "/v1/turn-taking/actions/respond"
 # SOUL.md, the most useful signal for decide/naturalize.
 _SYSTEM_PROMPT_CAP = 100000
 
-# ~/.hermes/config.yaml — used by core.py to read SOUL.md + the agent system prompt.
-_HERMES_CONFIG = Path.home() / ".hermes" / "config.yaml"
+# config.yaml in the process-level hermes home (HERMES_HOME-aware) — used by
+# core.py to read SOUL.md + the agent system prompt. Kept as a module attr so
+# tests can point it at a temp file.
+_HERMES_CONFIG = Path(os.getenv("HERMES_HOME") or Path.home() / ".hermes") / "config.yaml"
+
+
+def _hermes_config() -> Path:
+    """config.yaml of the ACTIVE hermes home.
+
+    Profile routing serves several profiles from one gateway process, scoping
+    each turn with a context-local home override (``set_hermes_home_override``)
+    that propagates into the agent worker thread — so reading it here makes
+    every config/SOUL.md read per-profile. No override (single-profile
+    gateways, tests) falls back to the module default above.
+    """
+    try:
+        from hermes_constants import get_hermes_home_override
+
+        override = get_hermes_home_override()
+        if override:
+            return Path(override) / "config.yaml"
+    except Exception:
+        pass
+    return _HERMES_CONFIG
 
 
 # ── Config + auth ─────────────────────────────────────────────────────────────
@@ -73,7 +95,7 @@ def _pacing() -> Dict[str, Any]:
     try:
         import yaml
 
-        cfg = yaml.safe_load(_HERMES_CONFIG.read_text()) or {}
+        cfg = yaml.safe_load(_hermes_config().read_text()) or {}
         pacing = (cfg.get("turn_taking") or {}).get("pacing")
         if isinstance(pacing, dict) and pacing:
             return dict(pacing)
