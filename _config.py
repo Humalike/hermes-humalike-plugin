@@ -11,14 +11,19 @@ DEFAULT_API = "https://api.humalike.com"
 def _getenv(name: str, default: str = "") -> str:
     """Env var, honoring Hermes's per-profile secret scope when one is in
     effect (multiplexed turns read the profile's .env, never another
-    profile's os.environ). Outside Hermes or single-profile → plain getenv."""
+    profile's os.environ). Outside Hermes → plain getenv. An unscoped lookup
+    in a multiplexed gateway (get_secret's fail-closed sentinel) returns the
+    default — NEVER os.environ, which may hold another profile's key; an
+    empty key just means "service off" to every caller here."""
     try:
-        from agent.secret_scope import get_secret
-
-        val = get_secret(name, default)
-        return val if val is not None else default
-    except Exception:
+        from agent.secret_scope import UnscopedSecretError, get_secret
+    except ImportError:
         return os.getenv(name, default)
+    try:
+        val = get_secret(name, default)
+    except UnscopedSecretError:
+        return default
+    return val if val is not None else default
 
 
 def service_url() -> str:
