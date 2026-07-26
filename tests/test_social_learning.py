@@ -66,6 +66,22 @@ def test_inject_returns_context_with_card():
         sl._CACHE.pop(sl._GLOBAL_KEY, None)
 
 
+def test_refreshes_at_five_then_every_fifteen_turns():
+    session_id = "refresh-cadence"
+    calls = []
+    orig_url, orig_spawn = sl._get_service_url, sl._spawn_refresh
+    sl._get_service_url = lambda: "http://example.test"
+    sl._spawn_refresh = lambda sid, history: calls.append((sid, history)) or True
+    sl._COUNTER.pop(session_id, None)
+    try:
+        for turn in range(35):
+            sl.on_pre_llm_call(session_id=session_id, conversation_history=[{"role": "user", "content": str(turn)}])
+    finally:
+        sl._get_service_url, sl._spawn_refresh = orig_url, orig_spawn
+        sl._COUNTER.pop(session_id, None)
+    assert [history[0]["content"] for _, history in calls] == ["4", "19", "34"]
+
+
 def test_per_session_card_opt_in():
     orig = sl._per_session_enabled
     sl._per_session_enabled = lambda: True
