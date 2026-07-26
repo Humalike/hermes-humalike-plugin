@@ -127,8 +127,8 @@ HUMALIKE_API_URL=…              # non-default environment; set EMPTY to disabl
 ```
 
 Optional persona knob in `~/.hermes/config.yaml` under `turn_taking:` -
-`soul_auto_enhance` (`true` by default: the one-shot persona pass on first
-startup; set `false` to skip it).
+`soul_auto_enhance` (`true` by default: one automatic persona attempt per
+resolved `SOUL.md` path; set `false` to skip it).
 
 That's it - restart the gateway and message the bot. It now reads the room and
 replies when it has something to say.
@@ -163,8 +163,9 @@ replies when it has something to say.
 Send the bot `/soul enhance` to deepen its persona: reads `SOUL.md`, enhances
 it via the [Personas API](https://docs.humalike.com/api-reference/personas),
 backs up the old file to `SOUL.md.bak`, writes the result - effective on the
-next message. Needs a seed description first; a bare template is skipped. Runs
-once automatically on first startup (disable: `soul_auto_enhance: false`).
+next message. Needs a seed description first; a bare template is skipped. The
+plugin makes one automatic attempt per resolved `SOUL.md` path (disable:
+`soul_auto_enhance: false`); if it fails, use `/soul enhance` to retry manually.
 
 ## License
 

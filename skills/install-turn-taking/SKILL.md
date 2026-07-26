@@ -88,7 +88,7 @@ slack:
 
 turn_taking:
   soul_path: "<the SOUL.md path found above>"
-  soul_auto_enhance: true  # one-shot persona enhance on first startup
+  soul_auto_enhance: true  # one automatic attempt per SOUL.md path
 ```
 
 ## 4. Restart and verify
@@ -114,6 +114,7 @@ later-added platforms, and overrides:
 - **WhatsApp groups** — respond to everyone: `configure-whatsapp-group` skill.
 - **Telegram groups** — privacy mode + chat authorization: `configure-telegram-group` skill.
 - **Slack unmentioned channel messages** (fail-open caveat): `configure-slack-group` skill.
-- `/soul enhance` (and first-startup auto-enhance) needs a real persona seed in
+- `/soul enhance` (and automatic persona enhancement) needs a real persona seed in
   `SOUL.md` — a bare template is skipped. Disable auto-enhance with
-  `soul_auto_enhance: false` or `HERMES_SOUL_AUTO_ENHANCE=false`.
+  `soul_auto_enhance: false` or `HERMES_SOUL_AUTO_ENHANCE=false`. An automatic
+  failure is recorded and is not retried automatically; use `/soul enhance` to retry.

@@ -14,10 +14,13 @@ v1 scope: ENHANCE an existing SOUL.md only. Create-from-scratch is a later add.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 import os
 import re
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -51,9 +54,6 @@ def _hermes_config() -> Path:
 
 def _auto_marker() -> Path:
     return _hermes_home() / ".soul_auto_enhanced"  # one-shot guard, per profile
-
-
-
 ENHANCE_PATH = "/v1/personas/actions/enhance"
 ENHANCEMENT_REPO = "/v1/personas/repositories/Enhancement/by-id/{}"
 DEFAULT_API = "https://api.humalike.com"
@@ -221,10 +221,8 @@ async def command(raw_args: str) -> str:
 
 # ── Auto-enhance on first startup ─────────────────────────────────────────────
 # There is no install-time hook in Hermes; register() runs at every gateway boot.
-# So "auto-run after install" = run once, guarded by a marker file. The marker is
-# written only after a *successful* enhance, so a boot where the service is down or
-# SOUL.md has no seed yet harmlessly retries next time. Disable with
-# `turn_taking.soul_auto_enhance: false` (or env HERMES_SOUL_AUTO_ENHANCE=false).
+# A per-SOUL.md state file claims the one automatic attempt before its thread starts.
+# Failures are terminal for automatic runs; use /soul enhance to retry manually.
 def _auto_enabled() -> bool:
     v = os.getenv("HERMES_SOUL_AUTO_ENHANCE")
     if v is None:
@@ -234,10 +232,49 @@ def _auto_enabled() -> bool:
     return str(v).strip().lower() not in ("false", "0", "no", "off")
 
 
-async def _auto_enhance() -> bool:
+def _auto_state_path(soul_path: Path) -> Path:
+    digest = hashlib.sha256(str(soul_path.resolve()).encode()).hexdigest()
+    return _hermes_home() / "soul-auto-enhance" / f"{digest}.json"
+
+
+def _auto_state(status: str) -> str:
+    return json.dumps(
+        {"status": status, "attempted_at": datetime.now(timezone.utc).isoformat()},
+        separators=(",", ":"),
+    )
+
+
+def _claim_auto_state(marker: Path) -> bool:
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with marker.open("x") as state:
+            state.write(_auto_state("pending"))
+    except FileExistsError:
+        return False
+    return True
+
+
+def _read_auto_state(marker: Path) -> Optional[str]:
+    try:
+        status = json.loads(marker.read_text()).get("status")
+    except (OSError, json.JSONDecodeError, AttributeError):
+        return None
+    return status if isinstance(status, str) else None
+
+
+def _write_auto_state(marker: Path, status: str) -> None:
+    temporary = marker.with_name(f".{marker.name}.{threading.get_ident()}.tmp")
+    try:
+        temporary.write_text(_auto_state(status))
+        temporary.replace(marker)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
+async def _auto_enhance(path: Path) -> bool:
     """One-shot enhance with no chat to reply to — log the outcome. Returns True
     only when SOUL.md was actually rewritten (so the caller sets the once-marker)."""
-    path = _soul_path()
     try:
         raw = path.read_text()
     except FileNotFoundError:
@@ -262,10 +299,27 @@ async def _auto_enhance() -> bool:
 
 
 def maybe_auto_enhance() -> None:
-    """Fire the one-shot auto-enhance on first startup, in a background thread so it
-    never blocks gateway boot (enhance polls for minutes). Marker-guarded and a no-op
-    once done. ponytail: delete ~/.hermes/.soul_auto_enhanced to force a re-run."""
-    if not _auto_enabled() or _auto_marker().exists():
+    """Schedule one automatic attempt per resolved SOUL.md path without blocking boot."""
+    if not _auto_enabled():
+        return
+    path = _soul_path().resolve()
+    try:
+        raw = path.read_text()
+    except FileNotFoundError:
+        raw = ""
+    if not seed_body(raw):
+        _log.info("soul: auto-enhance skipped — %s has no persona seed yet", path)
+        return
+
+    marker = _auto_state_path(path)
+    if not _claim_auto_state(marker):
+        status = _read_auto_state(marker)
+        if status == "failed":
+            _log.info("soul: auto-enhance previously failed for %s — use /soul enhance to retry", path)
+        elif status in ("pending", "succeeded"):
+            _log.info("soul: auto-enhance already %s for %s", status, path)
+        else:
+            _log.warning("soul: auto-enhance state unreadable for %s — not retrying automatically", path)
         return
 
     # Snapshot the context NOW: the background thread outlives any context-local
@@ -277,10 +331,14 @@ def maybe_auto_enhance() -> None:
 
     def _run() -> None:
         try:
-            if ctx.run(asyncio.run, _auto_enhance()):
-                ctx.run(_auto_marker).write_text("")  # succeeded → never auto-run again
+            status = "succeeded" if ctx.run(asyncio.run, _auto_enhance(path)) else "failed"
+            ctx.run(_write_auto_state, marker, status)
         except Exception as e:
+            try:
+                ctx.run(_write_auto_state, marker, "failed")
+            except OSError:
+                pass
             _log.warning("soul: auto-enhance thread errored: %s", e)
 
     threading.Thread(target=_run, daemon=True).start()
-    _log.info("soul: auto-enhance scheduled (first startup)")
+    _log.info("soul: auto-enhance scheduled for %s", path)
