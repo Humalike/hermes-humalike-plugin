@@ -346,10 +346,6 @@ def register(ctx) -> None:
         _log.info("turn-taking: registered social-memory pre_llm_call hook")
     except Exception as e:
         _log.warning("turn-taking: could not register social-memory hook: %s", e)
-    try:
-        social_learning.warm_recent_sessions()
-    except Exception as e:
-        _log.warning("turn-taking: social-learning warm-up skipped: %s", e)
     # Off by default; opt in with ``native_memory.strip_style: true`` to stop
     # native memory from also capturing style (the voice card owns style).
     try:

@@ -7,8 +7,8 @@ turn-taking's decide/naturalize voice (via ``_build_system_prompt_for_turn_takin
 
 Two clocks in one hook
 ======================
-SLOW CLOCK (refresh): every REFRESH_EVERY turns a daemon thread POSTs the recent
-transcript to ``{service_url}/v1/social-learning/extract``; the service returns a
+SLOW CLOCK (refresh): after five turns, then every REFRESH_EVERY turns, a daemon
+thread POSTs the recent transcript to ``{service_url}/v1/social-learning/extract``; the service returns a
 ``prompt_block`` ("voice card") cached under _LOCK. Failures are discarded.
 
 FAST CLOCK (inject): every call reads _CACHE and returns ``{"context": card}`` so
@@ -38,7 +38,8 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-REFRESH_EVERY: int = 5
+FIRST_REFRESH_AT: int = 5
+REFRESH_EVERY: int = 15
 WINDOW: int = 100
 SERVICE_PATH: str = "/v1/social-learning/actions/extract"
 
@@ -334,7 +335,7 @@ def warm_recent_sessions(limit: int = WARM_SESSIONS) -> None:
 
 # ── Hook ──────────────────────────────────────────────────────────────────────
 def on_pre_llm_call(**kwargs: Any) -> Optional[Dict[str, Any]]:
-    """pre_llm_call hook: inject the voice card and (every REFRESH_EVERY turns) refresh it."""
+    """pre_llm_call hook: inject the voice card; refresh at turns 5, 20, 35, ..."""
     try:
         session_id: str = kwargs.get("session_id") or ""
         if not session_id:
@@ -346,16 +347,13 @@ def on_pre_llm_call(**kwargs: Any) -> Optional[Dict[str, Any]]:
             n = _COUNTER[session_id]
             has_card = _card_key(session_id) in _CACHE
 
-        logger.debug(
-            "social-learning: turn %d session=%s card=%s (refresh every %d)",
-            n, session_id, "cached" if has_card else "none", REFRESH_EVERY,
-        )
+        logger.debug("social-learning: turn %d session=%s card=%s", n, session_id, "cached" if has_card else "none")
 
-        if (not has_card or n % REFRESH_EVERY == 0) and _get_service_url():
+        if n >= FIRST_REFRESH_AT and (n - FIRST_REFRESH_AT) % REFRESH_EVERY == 0 and _get_service_url():
             if _spawn_refresh(session_id, list(conversation_history)):
                 logger.info(
-                    "social-learning: turn %d session %s — firing detached refresh (%s)",
-                    n, session_id, "no card yet" if not has_card else "scheduled",
+                    "social-learning: turn %d session %s — firing detached refresh",
+                    n, session_id,
                 )
 
         with _LOCK:
