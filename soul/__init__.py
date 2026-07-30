@@ -298,7 +298,7 @@ async def _auto_enhance(path: Path) -> bool:
     return True
 
 
-def maybe_auto_enhance() -> None:
+def maybe_auto_enhance() -> Optional[str]:
     """Schedule one automatic attempt per resolved SOUL.md path without blocking boot."""
     if not _auto_enabled():
         return
@@ -312,14 +312,24 @@ def maybe_auto_enhance() -> None:
         return
 
     marker = _auto_state_path(path)
-    if not _claim_auto_state(marker):
+    try:
+        claimed = _claim_auto_state(marker)
+    except OSError as e:
+        _log.warning("soul: auto-enhance state unavailable for %s: %s", path, e)
+        return None
+    if not claimed:
         status = _read_auto_state(marker)
         if status == "failed":
             _log.info("soul: auto-enhance previously failed for %s — use /soul enhance to retry", path)
         elif status in ("pending", "succeeded"):
             _log.info("soul: auto-enhance already %s for %s", status, path)
+            if status == "pending":
+                return (f"⚠️ Persona auto-enhancement is still pending for {path.name} — "
+                        "use /soul enhance to retry.")
         else:
             _log.warning("soul: auto-enhance state unreadable for %s — not retrying automatically", path)
+            return (f"⚠️ Persona auto-enhancement state is unreadable for {path.name} — "
+                    "use /soul enhance to retry.")
         return
 
     # Snapshot the context NOW: the background thread outlives any context-local

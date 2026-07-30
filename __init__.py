@@ -325,7 +325,9 @@ def register(ctx) -> None:
     except Exception as e:
         _log.warning("turn-taking: could not register /connect command: %s", e)
     try:
-        soul.maybe_auto_enhance()  # one-shot on first startup (marker-guarded)
+        message = soul.maybe_auto_enhance()  # one-shot on first startup (marker-guarded)
+        if message:
+            notify.queue_startup(message)
     except Exception as e:
         _log.warning("turn-taking: auto-enhance skipped: %s", e)
 

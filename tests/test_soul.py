@@ -147,6 +147,53 @@ def test_template_does_not_claim_auto_enhance_state():
                 os.environ["HERMES_SOUL_PATH"] = original_path
 
 
+def test_pending_auto_enhance_requests_manual_retry():
+    with TemporaryDirectory() as directory:
+        original_home = soul._HERMES_HOME
+        original_path = os.environ.get("HERMES_SOUL_PATH")
+        try:
+            soul._HERMES_HOME = Path(directory)
+            persona_path = Path(directory) / "SOUL.md"
+            persona_path.write_text(REAL)
+            os.environ["HERMES_SOUL_PATH"] = str(persona_path)
+            marker = soul._auto_state_path(persona_path.resolve())
+            marker.parent.mkdir(parents=True)
+            marker.write_text(soul._auto_state("pending"))
+            assert soul.maybe_auto_enhance() == (
+                "⚠️ Persona auto-enhancement is still pending for SOUL.md — "
+                "use /soul enhance to retry."
+            )
+        finally:
+            soul._HERMES_HOME = original_home
+            if original_path is None:
+                os.environ.pop("HERMES_SOUL_PATH", None)
+            else:
+                os.environ["HERMES_SOUL_PATH"] = original_path
+
+
+def test_unavailable_auto_state_does_not_abort_startup():
+    original_claim = soul._claim_auto_state
+    try:
+        def unavailable(_marker):
+            raise OSError("read-only filesystem")
+
+        soul._claim_auto_state = unavailable
+        with TemporaryDirectory() as directory:
+            persona_path = Path(directory) / "SOUL.md"
+            persona_path.write_text(REAL)
+            original_path = os.environ.get("HERMES_SOUL_PATH")
+            try:
+                os.environ["HERMES_SOUL_PATH"] = str(persona_path)
+                assert soul.maybe_auto_enhance() is None
+            finally:
+                if original_path is None:
+                    os.environ.pop("HERMES_SOUL_PATH", None)
+                else:
+                    os.environ["HERMES_SOUL_PATH"] = original_path
+    finally:
+        soul._claim_auto_state = original_claim
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
