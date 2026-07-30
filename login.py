@@ -69,6 +69,15 @@ GATEWAY_KEY_DEFAULT = "hcg_360rQLmr4iabWKiEqc5ZFXY5sUM8g-wTjFO3cwNgTlI"
 # starting a duplicate session (a TUI banner can paint over the first print).
 PENDING_URI = None
 
+# First-boot crash-loop guard. A headless/containerized install with
+# restart:unless-stopped that can never complete the browser approval used to
+# open a brand-new device session on EVERY boot — one crash-looping box hit the
+# API ~30K times/day in launch week. The stamp file records the last automatic
+# attempt; first-boot login is skipped while it is younger than this. Manual
+# runs (terminal `login.py`, /connect) are never throttled.
+LOGIN_ATTEMPT_STAMP = _hermes_home() / ".humalike-login-attempt"
+FIRST_BOOT_RETRY_SECONDS = 15 * 60
+
 
 # ── Config (env first, then ~/.hermes/.env) ───────────────────────────────────
 def read_env_file(path: Path | None = None) -> dict:
@@ -254,6 +263,15 @@ def run(wait_for_tui: bool = False) -> int:
         return 1
     try:
         session = create_session(bearer)
+    except urllib.error.HTTPError as e:
+        if e.code == 429:
+            _show("Humalike login throttled: too many login attempts from this "
+                  "machine. If this box is headless, approve the pending link "
+                  f"from another device or put HUMALIKE_API_KEY=… in {HERMES_ENV} "
+                  "directly (create a key at https://humalike.com).")
+        else:
+            _show(f"Could not reach Humalike to start the login ({e}).")
+        return 1
     except Exception as e:
         _show(f"Could not reach Humalike to start the login ({e}).")
         return 1
@@ -319,20 +337,51 @@ def run(wait_for_tui: bool = False) -> int:
 
 
 # ── First-boot popup (called from register()) ─────────────────────────────────
+def _seconds_since_last_attempt() -> float | None:
+    """Age of the first-boot attempt stamp, or None when there is none."""
+    try:
+        return max(0.0, time.time() - LOGIN_ATTEMPT_STAMP.stat().st_mtime)
+    except OSError:
+        return None
+
+
+def _stamp_attempt() -> None:
+    """Record that an automatic login attempt started (best-effort)."""
+    try:
+        LOGIN_ATTEMPT_STAMP.parent.mkdir(parents=True, exist_ok=True)
+        LOGIN_ATTEMPT_STAMP.touch()
+    except OSError:
+        pass
+
+
 def maybe_first_boot_login() -> None:
     """(Re)run the device login whenever there is no WORKING API key — every
-    boot until connected. No marker: the source of truth is the key itself
+    boot until connected. The source of truth is the key itself
     (:func:`has_working_key`), not an 'already asked' flag, so a login the
-    operator couldn't see (headless) or that a restart interrupted simply
-    re-offers next boot instead of being lost forever. Runs on a daemon thread
-    so boot never blocks on the ~10-minute approval window. Concurrent boots
-    (gateway + dashboard) may each pop a link; the unapproved one just expires
-    and the .env write is atomic, so nothing is corrupted or wedged."""
+    operator couldn't see (headless) or that a restart interrupted re-offers
+    on a later boot instead of being lost forever. The only marker is the
+    time-limited attempt stamp: a boot within ``FIRST_BOOT_RETRY_SECONDS`` of
+    the previous automatic attempt skips the flow, so a crash-looping
+    container asks once per window instead of once per restart (the API also
+    429s runaway creates per hostname now). Runs on a daemon thread so boot
+    never blocks on the ~10-minute approval window. Concurrent boots (gateway
+    + dashboard) may each pop a link; the unapproved one just expires and the
+    .env write is atomic, so nothing is corrupted or wedged."""
     if not gateway_key():
         _log.info("humalike login: skipped — no client identifier configured")
         return
     if has_working_key():
         return  # connected and valid — nothing to do
+    elapsed = _seconds_since_last_attempt()
+    if elapsed is not None and elapsed < FIRST_BOOT_RETRY_SECONDS:
+        _log.info(
+            "humalike login: skipped — last attempt %.0fs ago (retry in %.0fs; "
+            "run login.py or /connect to retry now)",
+            elapsed,
+            FIRST_BOOT_RETRY_SECONDS - elapsed,
+        )
+        return
+    _stamp_attempt()
     threading.Thread(target=lambda: run(wait_for_tui=True), daemon=True, name="humalike-login").start()
 
 
