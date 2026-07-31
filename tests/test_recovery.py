@@ -22,6 +22,7 @@ sys.modules["humalike_recovery_test"] = _pkg
 
 state = importlib.import_module("humalike_recovery_test.turn_taking.state")
 notify = importlib.import_module("humalike_recovery_test.turn_taking.notify")
+service = importlib.import_module("humalike_recovery_test.turn_taking.service")
 delivery = importlib.import_module("humalike_recovery_test.turn_taking.delivery")
 
 
@@ -147,6 +148,83 @@ def test_concurrent_thread_alerts_are_deduplicated_until_every_scope_recovers():
         assert len(scheduled) == 2, "the last recovered connection emits one genuine recovery"
     finally:
         notify._schedule = original_schedule
+
+
+def test_stale_supervisor_cleanup_preserves_new_owner_state():
+    _reset_runtime()
+    old_task = object()
+    new_task = object()
+    adapter = _Adapter()
+    state.DELIVERY_TASKS["thread-a"] = new_task
+    state.DELIVERY_READY.add("thread-a")
+    state.ROUTES["thread-a"] = (adapter, "chat-a")
+    state.SESSIONS["session-a"] = "thread-a"
+    with notify._LOCK:
+        notify._active_scopes["ws"] = {"thread-a"}
+
+    delivery._cleanup_delivery_state("thread-a", old_task)
+
+    assert state.DELIVERY_TASKS["thread-a"] is new_task
+    assert "thread-a" in state.DELIVERY_READY
+    assert state.ROUTES["thread-a"] == (adapter, "chat-a")
+    assert state.SESSIONS["session-a"] == "thread-a"
+    assert notify.is_active("ws", "thread-a")
+
+
+def test_plugin_declares_websocket_runtime_dependency():
+    manifest = (_ROOT / "plugin.yaml").read_text()
+    assert "pip_dependencies:" in manifest
+    assert "websockets" in manifest
+
+
+@pytest.mark.asyncio
+async def test_missing_websocket_dependency_stops_supervisor_without_reconnect_grants():
+    _reset_runtime()
+    assert hasattr(service, "WebSocketDependencyError"), "dependency failure needs a permanent type"
+    adapter = _Adapter()
+    grant_attempts = 0
+    sleep_attempts = 0
+    original_receive = delivery._receive_loop
+    original_open = delivery.open_thread
+    original_sleep = delivery._sleep
+
+    async def missing_dependency(*_args, **_kwargs):
+        raise service.WebSocketDependencyError("websockets is not installed")
+
+    async def fake_open(_thread_id=None):
+        nonlocal grant_attempts
+        grant_attempts += 1
+        return None
+
+    async def fake_sleep(_delay):
+        nonlocal sleep_attempts
+        sleep_attempts += 1
+
+    delivery._receive_loop = missing_dependency
+    delivery.open_thread = fake_open
+    delivery._sleep = fake_sleep
+    try:
+        tid = await delivery._start_delivery(
+            adapter,
+            "chat-a",
+            open_response={
+                "thread": {"id": "thread-a"},
+                "realtime": {"connect_url": "ws://initial"},
+            },
+        )
+        assert tid == "thread-a"
+        task = state.DELIVERY_TASKS["thread-a"]
+        await asyncio.wait_for(task, timeout=1)
+        assert grant_attempts == 0
+        assert sleep_attempts == 0
+        assert "thread-a" not in state.DELIVERY_TASKS
+        assert "thread-a" not in state.DELIVERY_READY
+        assert "thread-a" not in state.ROUTES
+    finally:
+        delivery._receive_loop = original_receive
+        delivery.open_thread = original_open
+        delivery._sleep = original_sleep
+        await delivery._stop_all_deliveries()
 
 
 @pytest.mark.asyncio

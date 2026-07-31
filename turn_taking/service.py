@@ -21,6 +21,11 @@ from . import notify
 
 _log = logging.getLogger(__name__)
 
+
+class WebSocketDependencyError(RuntimeError):
+    """Permanent realtime startup failure: the WebSocket runtime is unavailable."""
+
+
 # ── Wire contract (turn-taking service action paths) ──────────────────────────
 OPEN_THREAD_PATH = "/v1/turn-taking/actions/open_thread"
 SUBMIT_PATH = "/v1/turn-taking/actions/submit_messages"
@@ -248,9 +253,9 @@ async def _receive_loop(
     """
     try:
         import websockets
-    except Exception as e:  # dependency missing
+    except ImportError as e:  # dependency missing: installation/configuration defect, not transient
         _log.warning("turn-taking WS unavailable (no websockets lib): %s", e)
-        raise
+        raise WebSocketDependencyError("websockets dependency is not installed") from e
     async with websockets.connect(connect_url) as ws:
         _log.info("tt ws: connected | %s", connect_url[:80])
         if on_connected is not None:

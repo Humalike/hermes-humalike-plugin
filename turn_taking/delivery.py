@@ -13,7 +13,13 @@ import logging
 from typing import Any, Optional
 
 from . import notify, state
-from .service import _connect_url, _receive_loop, _thread_id, open_thread
+from .service import (
+    WebSocketDependencyError,
+    _connect_url,
+    _receive_loop,
+    _thread_id,
+    open_thread,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -100,8 +106,11 @@ async def _forward_typing(thread_id: Optional[str], is_typing: Optional[bool]) -
 # ── Delivery bootstrap: open thread + supervised WS lifecycle ─────────────────
 def _cleanup_delivery_state(thread_id: str, task: Optional[asyncio.Task] = None) -> None:
     current = state.DELIVERY_TASKS.get(thread_id)
-    if task is None or current is task:
-        state.DELIVERY_TASKS.pop(thread_id, None)
+    if task is not None and current is not task:
+        # A replacement supervisor owns this thread now. The stale task's finally
+        # block must not erase the new owner's route, readiness, session, or alert.
+        return
+    state.DELIVERY_TASKS.pop(thread_id, None)
     state.DELIVERY_READY.discard(thread_id)
     state.ROUTES.pop(thread_id, None)
     for session_id, tid in list(state.SESSIONS.items()):
@@ -128,6 +137,14 @@ async def _supervise_delivery(thread_id: str, initial_url: str) -> None:
                 raise ConnectionError("WebSocket closed")
             except asyncio.CancelledError:
                 raise
+            except WebSocketDependencyError as e:
+                state.DELIVERY_READY.discard(thread_id)
+                _log.error(
+                    "turn-taking WS stopped tid=%s; permanent dependency failure: %s",
+                    thread_id, e,
+                )
+                notify.alert(e, notify.WS_LOST, kind="ws", scope=thread_id)
+                return
             except Exception as e:
                 state.DELIVERY_READY.discard(thread_id)
                 _log.warning(
