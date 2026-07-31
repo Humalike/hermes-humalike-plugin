@@ -38,6 +38,7 @@ def _reset_runtime():
     with notify._LOCK:
         notify._last_by_kind.clear()
         notify._active_scopes.clear()
+        getattr(notify, "_announced_kinds", set()).clear()
 
 
 def test_http_success_cannot_clear_live_realtime_failure():
@@ -94,6 +95,24 @@ def test_realtime_recovery_does_not_announce_turn_taking_while_http_is_still_fai
         assert notify.is_active("unreachable")
     finally:
         notify._schedule = original_schedule
+
+
+def test_cooldown_suppresses_repeated_flap_alerts_and_recoveries():
+    _reset_runtime()
+    scheduled = []
+    original_schedule = notify._schedule
+    original_monotonic = notify.time.monotonic
+    notify._schedule = scheduled.append
+    notify.time.monotonic = lambda: 1000.0
+    try:
+        for _ in range(10):
+            notify.alert(ConnectionError("ws flap"), notify.WS_LOST, kind="ws", scope="thread-a")
+            notify.recovered(kind="ws", scope="thread-a")
+
+        assert len(scheduled) == 2, "ten immediate flaps should emit one outage and one recovery"
+    finally:
+        notify._schedule = original_schedule
+        notify.time.monotonic = original_monotonic
 
 
 def test_concurrent_thread_alerts_are_deduplicated_until_every_scope_recovers():

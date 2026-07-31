@@ -28,6 +28,7 @@ _COOLDOWN_S = 30 * 60
 _LOCK = threading.Lock()             # alert() is now called from >1 thread
 _last_by_kind: dict[str, float] = {}  # error kind → monotonic ts of last alert
 _active_scopes: dict[str, set[str]] = {}  # error kind → independently failing scopes
+_announced_kinds: set[str] = set()  # kinds whose current outage reached the owner
 _pending: list = []                   # (text, on_delivered) startup msgs, flushed on 1st inbound
 
 _GLOBAL_SCOPE = "__global__"
@@ -91,6 +92,7 @@ def _fire(kind: str, text: str, scope: Optional[str] = None) -> None:
         if now - _last_by_kind.get(kind, -_COOLDOWN_S) < _COOLDOWN_S:
             return
         _last_by_kind[kind] = now
+        _announced_kinds.add(kind)
     _schedule(lambda: _send(text))
 
 
@@ -137,7 +139,7 @@ def clear(kind: str, scope: Optional[str] = None) -> None:
         scopes.discard(scope or _GLOBAL_SCOPE)
         if not scopes:
             _active_scopes.pop(kind, None)
-            _last_by_kind.pop(kind, None)
+            _announced_kinds.discard(kind)
 
 
 def recovered(*, kind: Optional[str] = None, scope: Optional[str] = None) -> None:
@@ -159,9 +161,11 @@ def recovered(*, kind: Optional[str] = None, scope: Optional[str] = None) -> Non
             if scopes:
                 return
             _active_scopes.pop(kind, None)
-            _last_by_kind.pop(kind, None)  # a later outage alerts immediately
-            other_failures_remain = bool(_active_scopes)
-        if other_failures_remain:
+            all_healthy = not _active_scopes
+            should_announce = all_healthy and bool(_announced_kinds)
+            if all_healthy:
+                _announced_kinds.clear()
+        if not should_announce:
             return
         _schedule(lambda: _send("✅ Humalike recovered — turn-taking active again."))
     except Exception:
@@ -177,9 +181,11 @@ def recovered_http() -> None:
                 return
             for kind in recovered_kinds:
                 _active_scopes.pop(kind, None)
-                _last_by_kind.pop(kind, None)
-            realtime_still_failed = bool(_active_scopes.get("ws"))
-        if realtime_still_failed:
+            all_healthy = not _active_scopes
+            should_announce = all_healthy and bool(_announced_kinds)
+            if all_healthy:
+                _announced_kinds.clear()
+        if not should_announce:
             return
         _schedule(lambda: _send("✅ Humalike recovered — turn-taking active again."))
     except Exception:
