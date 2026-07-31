@@ -13,6 +13,8 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import pytest
+
 _ROOT = Path(__file__).resolve().parent.parent
 _pkg = types.ModuleType("humalike_recovery_test")
 _pkg.__path__ = [str(_ROOT)]
@@ -56,6 +58,25 @@ def test_http_success_cannot_clear_live_realtime_failure():
         notify._schedule = original_schedule
 
 
+def test_http_recovery_does_not_announce_turn_taking_while_realtime_is_still_failed():
+    _reset_runtime()
+    scheduled = []
+    original_schedule = notify._schedule
+    notify._schedule = scheduled.append
+    try:
+        notify.alert(ConnectionError("ws drop"), notify.WS_LOST, kind="ws", scope="thread-a")
+        notify.alert(ConnectionError("http outage"), kind="unreachable")
+        assert len(scheduled) == 2
+
+        notify.recovered_http()
+
+        assert len(scheduled) == 2, "HTTP recovery must not claim turn-taking is active while WS is down"
+        assert notify.is_active("ws", "thread-a")
+        assert not notify.is_active("unreachable")
+    finally:
+        notify._schedule = original_schedule
+
+
 def test_concurrent_thread_alerts_are_deduplicated_until_every_scope_recovers():
     _reset_runtime()
     scheduled = []
@@ -90,6 +111,7 @@ def test_concurrent_thread_alerts_are_deduplicated_until_every_scope_recovers():
         notify._schedule = original_schedule
 
 
+@pytest.mark.asyncio
 async def test_disconnect_reconnects_with_fresh_token_and_delivery_stays_active():
     _reset_runtime()
     adapter = _Adapter()
@@ -163,6 +185,7 @@ async def test_disconnect_reconnects_with_fresh_token_and_delivery_stays_active(
         await delivery._stop_all_deliveries()
 
 
+@pytest.mark.asyncio
 async def test_multiple_threads_have_independent_supervisors_and_clean_shutdown():
     _reset_runtime()
     adapter = _Adapter()
@@ -210,6 +233,7 @@ async def test_multiple_threads_have_independent_supervisors_and_clean_shutdown(
         await delivery._stop_all_deliveries()
 
 
+@pytest.mark.asyncio
 async def test_reconnect_grant_failures_keep_retrying_with_bounded_backoff():
     _reset_runtime()
     adapter = _Adapter()

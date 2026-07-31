@@ -175,6 +175,9 @@ def recovered_http() -> None:
             for kind in recovered_kinds:
                 _active_scopes.pop(kind, None)
                 _last_by_kind.pop(kind, None)
+            realtime_still_failed = bool(_active_scopes.get("ws"))
+        if realtime_still_failed:
+            return
         _schedule(lambda: _send("✅ Humalike recovered — turn-taking active again."))
     except Exception:
         pass
