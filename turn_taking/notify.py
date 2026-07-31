@@ -160,6 +160,9 @@ def recovered(*, kind: Optional[str] = None, scope: Optional[str] = None) -> Non
                 return
             _active_scopes.pop(kind, None)
             _last_by_kind.pop(kind, None)  # a later outage alerts immediately
+            other_failures_remain = bool(_active_scopes)
+        if other_failures_remain:
+            return
         _schedule(lambda: _send("✅ Humalike recovered — turn-taking active again."))
     except Exception:
         pass

@@ -77,6 +77,25 @@ def test_http_recovery_does_not_announce_turn_taking_while_realtime_is_still_fai
         notify._schedule = original_schedule
 
 
+def test_realtime_recovery_does_not_announce_turn_taking_while_http_is_still_failed():
+    _reset_runtime()
+    scheduled = []
+    original_schedule = notify._schedule
+    notify._schedule = scheduled.append
+    try:
+        notify.alert(ConnectionError("http outage"), kind="unreachable")
+        notify.alert(ConnectionError("ws drop"), notify.WS_LOST, kind="ws", scope="thread-a")
+        assert len(scheduled) == 2
+
+        notify.recovered(kind="ws", scope="thread-a")
+
+        assert len(scheduled) == 2, "WS recovery must not claim turn-taking is active while HTTP is down"
+        assert not notify.is_active("ws", "thread-a")
+        assert notify.is_active("unreachable")
+    finally:
+        notify._schedule = original_schedule
+
+
 def test_concurrent_thread_alerts_are_deduplicated_until_every_scope_recovers():
     _reset_runtime()
     scheduled = []
