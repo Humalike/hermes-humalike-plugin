@@ -12,10 +12,14 @@ import asyncio
 import logging
 from typing import Any, Optional
 
-from . import state
+from . import notify, state
 from .service import _connect_url, _receive_loop, _thread_id, open_thread
 
 _log = logging.getLogger(__name__)
+
+_RECONNECT_BACKOFF_INITIAL = 1.0
+_RECONNECT_BACKOFF_MAX = 30.0
+_sleep = asyncio.sleep  # module seam for deterministic recovery tests
 
 
 def _set_route(thread_id: str, adapter: Any, chat_id: str) -> None:
@@ -93,28 +97,108 @@ async def _forward_typing(thread_id: Optional[str], is_typing: Optional[bool]) -
         _log.warning("turn-taking typing failed: %s", e)
 
 
-# ── Delivery bootstrap: open thread + route + start the WS loop ────────────────
+# ── Delivery bootstrap: open thread + supervised WS lifecycle ─────────────────
+def _cleanup_delivery_state(thread_id: str, task: Optional[asyncio.Task] = None) -> None:
+    current = state.DELIVERY_TASKS.get(thread_id)
+    if task is None or current is task:
+        state.DELIVERY_TASKS.pop(thread_id, None)
+    state.DELIVERY_READY.discard(thread_id)
+    state.ROUTES.pop(thread_id, None)
+    for session_id, tid in list(state.SESSIONS.items()):
+        if tid == thread_id:
+            state.SESSIONS.pop(session_id, None)
+    notify.clear("ws", thread_id)
+
+
+async def _supervise_delivery(thread_id: str, initial_url: str) -> None:
+    """Keep one thread's realtime delivery alive with fresh-token reconnects."""
+    url = initial_url
+    backoff = _RECONNECT_BACKOFF_INITIAL
+    task = asyncio.current_task()
+    try:
+        while True:
+            async def connected() -> None:
+                nonlocal backoff
+                state.DELIVERY_READY.add(thread_id)
+                backoff = _RECONNECT_BACKOFF_INITIAL
+                notify.recovered(kind="ws", scope=thread_id)
+
+            try:
+                await _receive_loop(url, _forward, _forward_typing, connected)
+                raise ConnectionError("WebSocket closed")
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                state.DELIVERY_READY.discard(thread_id)
+                _log.warning(
+                    "turn-taking WS disconnected tid=%s; retrying in %.1fs: %s",
+                    thread_id, backoff, e,
+                )
+                notify.alert(e, notify.WS_LOST, kind="ws", scope=thread_id)
+
+            while True:
+                await _sleep(backoff)
+                backoff = min(backoff * 2, _RECONNECT_BACKOFF_MAX)
+                try:
+                    response = await open_thread(thread_id)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    _log.warning("turn-taking reconnect grant failed tid=%s: %s", thread_id, e)
+                    continue
+                reopened_tid = _thread_id(response)
+                url = _connect_url(response) or ""
+                if reopened_tid == thread_id and url:
+                    break
+                _log.warning("turn-taking reconnect grant malformed tid=%s", thread_id)
+    finally:
+        _cleanup_delivery_state(thread_id, task)
+
+
+async def _stop_delivery(thread_id: str) -> None:
+    task = state.DELIVERY_TASKS.get(thread_id)
+    if task is None:
+        _cleanup_delivery_state(thread_id)
+        return
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    _cleanup_delivery_state(thread_id, task)
+
+
+async def _stop_all_deliveries() -> None:
+    """Cancel every supervised socket and await cleanup (idempotent)."""
+    for thread_id in list(state.DELIVERY_TASKS):
+        await _stop_delivery(thread_id)
+
+
 async def _start_delivery(
-    adapter: Any, chat_id: str, thread_id: Optional[str] = None
+    adapter: Any, chat_id: str, thread_id: Optional[str] = None,
+    *, open_response: Optional[dict] = None,
 ) -> Optional[str]:
     """Open/reopen a thread, register its route, and start its WS receive loop.
 
     Returns the thread_id (use it for submit_messages / respond), or None if
     open_thread failed (fail-open: caller behaves as if turn-taking is off).
 
-    ponytail: spawn-and-forget — assumes a stable connection, so no task
-    tracking / reconnect yet. Caller dedupes (one start per conversation); the
-    receive loop connects in ~ms, well before bubbles come due (~reading delay).
+    Exactly one tracked supervisor owns each thread. Reconnects reopen the same
+    thread id to obtain a fresh short-lived WebSocket token.
     """
-    resp = await open_thread(thread_id)
+    resp = open_response if open_response is not None else await open_thread(thread_id)
     tid = _thread_id(resp)
     url = _connect_url(resp)
     if not tid or not url:
         _log.warning("turn-taking: open_thread failed — no delivery for chat %s", chat_id)
         return None
     _set_route(tid, adapter, chat_id)
-    _log.info("tt delivery: thread opened tid=%s for chat=%s → starting WS loop", tid, chat_id)
-    asyncio.create_task(_receive_loop(url, _forward, _forward_typing))
+    existing = state.DELIVERY_TASKS.get(tid)
+    if existing is not None and not existing.done():
+        return tid
+    _log.info("tt delivery: thread opened tid=%s for chat=%s → starting WS supervisor", tid, chat_id)
+    task = asyncio.create_task(_supervise_delivery(tid, url), name=f"humalike-ws-{tid}")
+    state.DELIVERY_TASKS[tid] = task
     return tid
 
 
@@ -141,7 +225,10 @@ async def _ensure_thread(session_id: str, adapter: Any, chat_id: str) -> Optiona
 
 
 def _chat_for_session(session_id: str) -> Optional[str]:
-    """The WhatsApp chat_id a session delivers to (session → thread → route)."""
+    """Return the chat only while its supervised realtime path is connected."""
     thread = state.SESSIONS.get(session_id)
+    task = state.DELIVERY_TASKS.get(thread or "")
+    if not thread or thread not in state.DELIVERY_READY or task is None or task.done():
+        return None
     route = state.ROUTES.get(thread or "") if thread else None
     return route[1] if route else None

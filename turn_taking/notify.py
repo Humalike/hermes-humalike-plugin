@@ -8,8 +8,8 @@ social-learning daemon) are scheduled onto the captured gateway loop.
 
 Kinds: ``auth`` (bad key), ``quota`` (credit/limit), ``unreachable`` (no
 connection), ``server`` (5xx), ``ws`` (realtime drop), ``config`` (startup
-misconfig). A successful call clears the active kinds and posts one recovery
-line.
+misconfig). Failures are tracked per scope (notably per WebSocket thread), so an
+unrelated HTTP success or one recovered socket cannot clear another live fault.
 """
 
 from __future__ import annotations
@@ -27,11 +27,13 @@ _log = logging.getLogger(__name__)
 _COOLDOWN_S = 30 * 60
 _LOCK = threading.Lock()             # alert() is now called from >1 thread
 _last_by_kind: dict[str, float] = {}  # error kind → monotonic ts of last alert
-_active_kinds: set[str] = set()       # kinds currently in the "failing" state
+_active_scopes: dict[str, set[str]] = {}  # error kind → independently failing scopes
 _pending: list = []                   # (text, on_delivered) startup msgs, flushed on 1st inbound
 
-WS_LOST = ("⚠️ Humalike realtime connection lost — the bot may go SILENT in "
-           "affected chats until the gateway restarts.")
+_GLOBAL_SCOPE = "__global__"
+
+WS_LOST = ("⚠️ Humalike realtime connection lost — reconnecting automatically; "
+           "affected chats temporarily use direct Hermes replies.")
 
 
 def _kind(status: Optional[int]) -> str:
@@ -74,27 +76,35 @@ def _schedule(make_coro) -> None:
         loop.call_soon_threadsafe(lambda: loop.create_task(make_coro()))
 
 
-def _fire(kind: str, text: str) -> None:
-    """Rate-limit by kind, mark it active, and schedule the send."""
+def _fire(kind: str, text: str, scope: Optional[str] = None) -> None:
+    """Mark one scope failed and emit at most one alert for the whole kind."""
     with _LOCK:
+        scopes = _active_scopes.setdefault(kind, set())
+        scope_key = scope or _GLOBAL_SCOPE
+        if scope_key in scopes:
+            return
+        first_for_kind = not scopes
+        scopes.add(scope_key)
+        if not first_for_kind:
+            return
         now = time.monotonic()
         if now - _last_by_kind.get(kind, -_COOLDOWN_S) < _COOLDOWN_S:
             return
         _last_by_kind[kind] = now
-        _active_kinds.add(kind)
     _schedule(lambda: _send(text))
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
 def alert(e: Optional[Exception] = None, text: Optional[str] = None,
-          kind: Optional[str] = None, status: Optional[int] = None) -> None:
+          kind: Optional[str] = None, status: Optional[int] = None,
+          scope: Optional[str] = None) -> None:
     """Fire-and-forget a rate-limited home-channel alert for a failed API call."""
     try:
         if status is None:
             status = getattr(getattr(e, "response", None), "status_code", None)
         k = kind or _kind(status)
         msg = text or f"⚠️ Humalike {_why(status)} — the bot replies unfiltered until this is fixed."
-        _fire(k, msg)
+        _fire(k, msg, scope)
     except Exception:
         pass  # alerting must never hurt message flow (already logged by caller)
 
@@ -111,14 +121,60 @@ def alert_social(e: Optional[Exception] = None, status: Optional[int] = None) ->
         pass
 
 
-def recovered() -> None:
-    """Call on a successful API response: if we'd alerted, post recovery once."""
+def is_active(kind: str, scope: Optional[str] = None) -> bool:
+    """Whether ``scope`` (or any scope when omitted) is still failing."""
+    with _LOCK:
+        scopes = _active_scopes.get(kind, set())
+        return bool(scopes) if scope is None else (scope or _GLOBAL_SCOPE) in scopes
+
+
+def clear(kind: str, scope: Optional[str] = None) -> None:
+    """Forget a failure scope without announcing recovery (used on shutdown)."""
+    with _LOCK:
+        scopes = _active_scopes.get(kind)
+        if not scopes:
+            return
+        scopes.discard(scope or _GLOBAL_SCOPE)
+        if not scopes:
+            _active_scopes.pop(kind, None)
+            _last_by_kind.pop(kind, None)
+
+
+def recovered(*, kind: Optional[str] = None, scope: Optional[str] = None) -> None:
+    """Resolve one scoped failure; announce only when that kind is fully healthy.
+
+    The no-argument form remains the HTTP-success behavior for compatibility and
+    deliberately leaves ``ws`` scopes untouched.
+    """
+    if kind is None:
+        recovered_http()
+        return
     try:
         with _LOCK:
-            if not _active_kinds:
+            scopes = _active_scopes.get(kind)
+            scope_key = scope or _GLOBAL_SCOPE
+            if not scopes or scope_key not in scopes:
                 return
-            _active_kinds.clear()
-            _last_by_kind.clear()  # let the next failure alert immediately
+            scopes.remove(scope_key)
+            if scopes:
+                return
+            _active_scopes.pop(kind, None)
+            _last_by_kind.pop(kind, None)  # a later outage alerts immediately
+        _schedule(lambda: _send("✅ Humalike recovered — turn-taking active again."))
+    except Exception:
+        pass
+
+
+def recovered_http() -> None:
+    """Resolve HTTP/API failures only; never clear live realtime failures."""
+    try:
+        with _LOCK:
+            recovered_kinds = [kind for kind in _active_scopes if kind != "ws"]
+            if not recovered_kinds:
+                return
+            for kind in recovered_kinds:
+                _active_scopes.pop(kind, None)
+                _last_by_kind.pop(kind, None)
         _schedule(lambda: _send("✅ Humalike recovered — turn-taking active again."))
     except Exception:
         pass
