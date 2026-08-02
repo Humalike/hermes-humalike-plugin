@@ -103,19 +103,10 @@ plugin's report ends with that reminder.
   `WHATSAPP_ALLOW_ALL_USERS=false` and/or `WHATSAPP_GROUP_POLICY=allowlist`.
 - **Discord bot setup** - steps that can't be automated. Create the bot in the
   [Developer Portal](https://discord.com/developers/applications), enable
-  **Message Content Intent** and **Server Members Intent** (Bot → Privileged
-  Gateway Intents - without the first the bot receives empty messages), invite
-  it with
-  `https://discord.com/oauth2/authorize?client_id=<APP_ID>&scope=bot+applications.commands&permissions=274878286912`,
-  then add to `~/.hermes/.env`:
-  ```bash
-  DISCORD_BOT_TOKEN=...                # from the Developer Portal
-  DISCORD_ALLOWED_USERS=<user-id,...>  # without this the gateway denies everyone
-  DISCORD_REQUIRE_MENTION=false        # let turn-taking see unmentioned channel messages
-  #  (or per-channel: DISCORD_FREE_RESPONSE_CHANNELS=<channel-id,...>)
-  DISCORD_AUTO_THREAD=false            # reply inline; auto-threads would fragment the room
-  DISCORD_REACTIONS=false              # no 👀/✅ ack reactions
-  ```
+  **Message Content Intent** and **Server Members Intent**, and invite it with
+  the `bot+applications.commands` scope and `permissions=274878286912`. Full
+  walkthrough (intents, invite URL, env vars, auth models): the
+  [`configure-discord-group`](skills/configure-discord-group/SKILL.md) skill.
 
 ### Overrides
 
