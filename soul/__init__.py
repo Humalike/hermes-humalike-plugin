@@ -20,6 +20,7 @@ import logging
 import os
 import re
 import threading
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -132,15 +133,63 @@ def _persona_text(raw: str) -> str:
 _NO_EMDASH_DIRECTIVE = "\n\nHARD RULE: never use an em-dash (—) anywhere in this persona."
 
 
-async def enhance(persona_text: str) -> Optional[Dict[str, Any]]:
-    """Enhance a persona and return the rendered ``persona`` dict (with
-    ``system_prompt``/``fields``/``markdown``), or None on any failure (fail-open).
+@dataclass(frozen=True)
+class EnhanceResult:
+    """The enhanced persona or a diagnostic failure outcome."""
+
+    persona: Optional[Dict[str, Any]] = None
+    error_kind: Optional[str] = None
+    http_status: Optional[int] = None
+    enhancement_id: Optional[str] = None
+
+
+def _http_error_kind(status: int) -> str:
+    if status == 401:
+        return "auth"
+    if status == 402:
+        return "credits"
+    if status == 403:
+        return "forbidden"
+    if status == 429:
+        return "rate_limit"
+    if status >= 500:
+        return "service_unavailable"
+    return "rejected"
+
+
+def _error_message(result: EnhanceResult) -> str:
+    if result.error_kind == "auth":
+        return "⚠️ Humalike API key rejected — check HUMALIKE_API_KEY."
+    if result.error_kind == "credits":
+        return "⚠️ Not enough Humalike credits to enhance this persona."
+    if result.error_kind == "forbidden":
+        return "⚠️ Humalike denied this request — try again later or contact support."
+    if result.error_kind == "rate_limit":
+        return "⚠️ Too many requests — try again later."
+    if result.error_kind == "service_unavailable":
+        return "⚠️ Persona service is temporarily unavailable — try again later."
+    if result.error_kind == "unreachable":
+        return "⚠️ Couldn't reach the persona service — try again later."
+    if result.error_kind == "result_not_visible":
+        return "⚠️ Couldn't access the enhancement result — check API key configuration."
+    if result.error_kind == "provider_failed":
+        return "⚠️ Persona enhancement failed on our side — try again later."
+    if result.error_kind == "timeout":
+        return "⚠️ Persona enhancement is taking longer than five minutes — try again later."
+    if result.error_kind == "invalid_response":
+        return "⚠️ Persona service returned an invalid response."
+    return f"⚠️ Persona service rejected this SOUL.md (HTTP {result.http_status})."
+
+
+async def enhance(persona_text: str) -> EnhanceResult:
+    """Enhance a persona, preserving the cause whenever it cannot complete.
 
     Server-side this is async: POST creates a job, then we poll the Enhancement
     repository until it reaches a terminal status.
     """
     base = _api_url()
     headers = {"Authorization": f"Bearer {_api_key()}", "Content-Type": "application/json"}
+    eid: Optional[str] = None
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             r = await client.post(
@@ -149,33 +198,52 @@ async def enhance(persona_text: str) -> Optional[Dict[str, Any]]:
                 headers=headers,
             )
             r.raise_for_status()
-            eid = (r.json() or {}).get("id")
-            if not eid:
+            try:
+                created = r.json()
+            except ValueError:
+                created = None
+            eid = created.get("id") if isinstance(created, dict) else None
+            if not isinstance(eid, str) or not eid:
                 _log.warning("soul: enhance POST returned no id: %s", r.text[:200])
-                return None
+                return EnhanceResult(error_kind="invalid_response")
             poll_url = base + ENHANCEMENT_REPO.format(eid)
             for _ in range(POLL_MAX):
                 await asyncio.sleep(POLL_EVERY)
                 p = await client.get(poll_url, headers=headers)
                 p.raise_for_status()
-                data = p.json()
+                try:
+                    data = p.json()
+                except ValueError:
+                    _log.warning("soul: enhancement %s returned invalid JSON", eid)
+                    return EnhanceResult(error_kind="invalid_response", enhancement_id=eid)
                 if data is None:  # ownership mismatch → repo returns null
                     _log.warning("soul: enhancement %s not visible (wrong API key?)", eid)
-                    return None
+                    return EnhanceResult(error_kind="result_not_visible", enhancement_id=eid)
+                if not isinstance(data, dict):
+                    _log.warning("soul: enhancement %s returned invalid data", eid)
+                    return EnhanceResult(error_kind="invalid_response", enhancement_id=eid)
                 status = data.get("status")
                 if status == "succeeded":
-                    return data.get("persona")
+                    persona = data.get("persona")
+                    if isinstance(persona, dict):
+                        return EnhanceResult(persona=persona, enhancement_id=eid)
+                    _log.warning("soul: enhancement %s succeeded without a persona", eid)
+                    return EnhanceResult(error_kind="invalid_response", enhancement_id=eid)
                 if status == "failed":
                     _log.warning("soul: enhance %s failed: %s", eid, data.get("error"))
-                    return None
+                    return EnhanceResult(error_kind="provider_failed", enhancement_id=eid)
             _log.warning("soul: enhance %s timed out after ~%ds", eid, int(POLL_MAX * POLL_EVERY))
-            return None
+            return EnhanceResult(error_kind="timeout", enhancement_id=eid)
     except httpx.HTTPStatusError as e:
         _log.warning("soul: enhance → HTTP %s: %s", e.response.status_code, e.response.text[:200])
-        return None
+        return EnhanceResult(
+            error_kind=_http_error_kind(e.response.status_code),
+            http_status=e.response.status_code,
+            enhancement_id=eid,
+        )
     except httpx.HTTPError as e:
         _log.warning("soul: enhance unreachable: %s", e)
-        return None
+        return EnhanceResult(error_kind="unreachable")
 
 
 # ── Command handler ───────────────────────────────────────────────────────────
@@ -201,10 +269,12 @@ async def command(raw_args: str) -> str:
         return ("Your SOUL.md has no persona to enhance yet — add a few lines describing your "
                 "agent, then send /soul enhance. (Generating one from scratch is coming soon.)")
 
-    persona = await enhance(_persona_text(raw))
-    enhanced = (persona or {}).get("system_prompt")
-    if not enhanced:
-        return "⚠️ Couldn't reach the persona service — SOUL.md left unchanged."
+    result = await enhance(_persona_text(raw))
+    if result.error_kind:
+        return _error_message(result) + " SOUL.md left unchanged."
+    enhanced = (result.persona or {}).get("system_prompt")
+    if not isinstance(enhanced, str) or not enhanced.strip():
+        return "⚠️ Persona service returned an invalid response. SOUL.md left unchanged."
 
     enhanced = enhanced.strip()
     try:
@@ -282,10 +352,13 @@ async def _auto_enhance(path: Path) -> bool:
     if not seed_body(raw):
         _log.info("soul: auto-enhance skipped — %s has no persona seed yet", path)
         return False
-    persona = await enhance(_persona_text(raw))
-    enhanced = (persona or {}).get("system_prompt")
-    if not enhanced:
-        _log.warning("soul: auto-enhance failed (service unreachable?) — %s left unchanged", path)
+    result = await enhance(_persona_text(raw))
+    enhanced = (result.persona or {}).get("system_prompt")
+    if not isinstance(enhanced, str) or not enhanced.strip():
+        _log.warning(
+            "soul: auto-enhance failed kind=%s status=%s id=%s — %s left unchanged",
+            result.error_kind, result.http_status, result.enhancement_id, path,
+        )
         return False
     enhanced = enhanced.strip()
     try:
