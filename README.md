@@ -137,7 +137,9 @@ replies when it has something to say.
 
 - **Typing indicator** - Discord's typing is a persistent refresh loop, so the
   plugin mutes the host's think-time typing and shows typing only while a reply
-  bubble is being paced, with an explicit stop after the last bubble.
+  bubble is being paced, with an explicit stop after the last bubble. To restore
+  host typing during think time: `HERMES_DISCORD_MUTE_HOST_TYPING=false` (env) or
+  `turn_taking: {discord_mute_host_typing: false}` (config.yaml).
 - **Captionless media** - images/files sent without text reach the service as a
   clean `[image]`/`[media]` marker (with `has_media`), not the host's
   placeholder sentence, so turn-taking knows media arrived.
