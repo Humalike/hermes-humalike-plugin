@@ -35,7 +35,7 @@ WS_LOST = ("⚠️ Humalike realtime connection lost — the bot may go SILENT i
 
 
 def _kind(status: Optional[int]) -> str:
-    if status in (401, 403):
+    if status == 401:
         return "auth"
     if status in (402, 429):
         return "quota"
@@ -45,8 +45,11 @@ def _kind(status: Optional[int]) -> str:
 
 
 def _why(status: Optional[int]) -> str:
-    if status in (401, 403):
+    if status == 401:
         return "API key rejected — check HUMALIKE_API_KEY"
+    if status == 403:
+        return ("couldn't process a request (HTTP 403) — your API key may still be valid; "
+                "try again later or contact Humalike support")
     if status in (402, 429):
         return "credit/quota exhausted — top up to restore turn-taking"
     if status is None:

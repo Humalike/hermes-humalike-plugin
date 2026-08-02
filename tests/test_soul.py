@@ -10,6 +10,7 @@ import importlib.util
 import json
 import logging
 import os
+import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -17,6 +18,7 @@ _spec = importlib.util.spec_from_file_location(
     "tt_soul", Path(__file__).resolve().parent.parent / "soul" / "__init__.py"
 )
 soul = importlib.util.module_from_spec(_spec)
+sys.modules[_spec.name] = soul
 _spec.loader.exec_module(soul)
 
 TEMPLATE = """# Hermes Agent Persona
