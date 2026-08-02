@@ -10,13 +10,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 import sys
 from typing import Any, Callable
 
 from . import notify, state
 from .core import _inbound_gate, _build_system_prompt_for_turn_taking, _decide, _delivery_meta
-from .service import _to_messages
+from .service import _hermes_config, _to_messages
 
 _log = logging.getLogger(__name__)
 
@@ -454,6 +455,24 @@ def _patch_discord_handle_message() -> bool:
 
 
 # ── Discord host-typing mute: typing only during paced delivery ───────────────
+def _discord_typing_muted() -> bool:
+    """Whether Discord host-typing is muted. Env var wins over config.yaml's
+    turn_taking block, default on (current behavior). Mirror of
+    soul._auto_enabled."""
+    v = os.getenv("HERMES_DISCORD_MUTE_HOST_TYPING")
+    if v is None:
+        try:
+            import yaml
+
+            cfg = yaml.safe_load(_hermes_config().read_text()) or {}
+            v = (cfg.get("turn_taking") or {}).get("discord_mute_host_typing")
+        except Exception:
+            v = None
+    if v is None:
+        return True  # default on
+    return str(v).strip().lower() not in ("false", "0", "no", "off")
+
+
 def _patch_discord_send_typing() -> bool:
     """Mute the HOST's typing indicator on Discord; delivery keeps the real one.
 
@@ -464,8 +483,12 @@ def _patch_discord_send_typing() -> bool:
     "typed" (service-paced). Replace ``send_typing`` with a no-op and stash the
     genuine one in ``state.ORIG_SEND_TYPING`` for delivery._forward_typing.
     ``stop_typing`` stays genuine (stopping a never-started loop is a no-op).
-    Idempotent.
+    Idempotent. Disable with ``turn_taking.discord_mute_host_typing: false`` in
+    config.yaml or ``HERMES_DISCORD_MUTE_HOST_TYPING=false``.
     """
+    if not _discord_typing_muted():
+        _log.info("turn-taking: Discord host typing NOT muted (discord_mute_host_typing=false)")
+        return False
     try:
         DiscordAdapter = _real_adapter_class("discord", "DiscordAdapter")
     except Exception as e:
