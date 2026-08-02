@@ -140,7 +140,7 @@ replies when it has something to say.
 | WhatsApp | DMs work as-is. Groups: [`skills/configure-whatsapp-group`](skills/configure-whatsapp-group/SKILL.md) |
 | Telegram | DMs work as-is. Groups: [`skills/configure-telegram-group`](skills/configure-telegram-group/SKILL.md) |
 | Slack | DMs/@mentions work as-is. Unmentioned channel messages: [`skills/configure-slack-group`](skills/configure-slack-group/SKILL.md) |
-| Discord | DMs work as-is. Channels: enable both privileged intents, set `DISCORD_ALLOWED_USERS`, and `DISCORD_REQUIRE_MENTION=false` (or `DISCORD_FREE_RESPONSE_CHANNELS=<channel-id,...>`) - see **Discord bot setup** above |
+| Discord | DMs work as-is. Server channels: [`skills/configure-discord-group`](skills/configure-discord-group/SKILL.md) |
 
 ### Discord notes
 
