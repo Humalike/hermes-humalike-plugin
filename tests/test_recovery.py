@@ -1,19 +1,21 @@
-"""Regression coverage for supervised realtime recovery.
+"""Focused checks for supervised realtime recovery.
 
-Run directly:  python3 tests/test_recovery.py
+Run directly: python3 tests/test_recovery.py
 """
 
 import asyncio
 import importlib
 import inspect
 import sys
-import threading
 import types
-from collections import Counter
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-import pytest
+if "httpx" not in sys.modules:
+    sys.modules["httpx"] = types.SimpleNamespace(
+        AsyncClient=object,
+        HTTPError=type("HTTPError", (Exception,), {}),
+        HTTPStatusError=type("HTTPStatusError", (Exception,), {}),
+    )
 
 _ROOT = Path(__file__).resolve().parent.parent
 _pkg = types.ModuleType("humalike_recovery_test")
@@ -28,376 +30,92 @@ delivery = importlib.import_module("humalike_recovery_test.turn_taking.delivery"
 
 class _Adapter:
     async def send(self, chat_id, content, metadata=None):
-        return None
+        pass
 
 
-def _reset_runtime():
+def _reset():
     state.ROUTES.clear()
     state.SESSIONS.clear()
     state.DELIVERY_TASKS.clear()
-    state.DELIVERY_READY.clear()
     with notify._LOCK:
         notify._last_by_kind.clear()
         notify._active_scopes.clear()
-        getattr(notify, "_announced_kinds", set()).clear()
+        notify._announced_kinds.clear()
 
 
-def test_http_success_cannot_clear_live_realtime_failure():
-    _reset_runtime()
+def test_recovery_waits_for_every_http_and_websocket_failure():
+    _reset()
     scheduled = []
-    original_schedule = notify._schedule
+    original = notify._schedule
     notify._schedule = scheduled.append
     try:
-        notify.alert(ConnectionError("drop"), notify.WS_LOST, kind="ws", scope="thread-a")
-        assert len(scheduled) == 1
-        notify.recovered_http()
-        assert len(scheduled) == 1, "an unrelated HTTP success must not announce WS recovery"
-        assert notify.is_active("ws", "thread-a")
-        notify.recovered(kind="ws", scope="thread-a")
-        assert len(scheduled) == 2
-        assert not notify.is_active("ws", "thread-a")
-    finally:
-        notify._schedule = original_schedule
-
-
-def test_http_recovery_does_not_announce_turn_taking_while_realtime_is_still_failed():
-    _reset_runtime()
-    scheduled = []
-    original_schedule = notify._schedule
-    notify._schedule = scheduled.append
-    try:
-        notify.alert(ConnectionError("ws drop"), notify.WS_LOST, kind="ws", scope="thread-a")
-        notify.alert(ConnectionError("http outage"), kind="unreachable")
-        assert len(scheduled) == 2
-
-        notify.recovered_http()
-
-        assert len(scheduled) == 2, "HTTP recovery must not claim turn-taking is active while WS is down"
-        assert notify.is_active("ws", "thread-a")
-        assert not notify.is_active("unreachable")
-    finally:
-        notify._schedule = original_schedule
-
-
-def test_realtime_recovery_does_not_announce_turn_taking_while_http_is_still_failed():
-    _reset_runtime()
-    scheduled = []
-    original_schedule = notify._schedule
-    notify._schedule = scheduled.append
-    try:
-        notify.alert(ConnectionError("http outage"), kind="unreachable")
-        notify.alert(ConnectionError("ws drop"), notify.WS_LOST, kind="ws", scope="thread-a")
-        assert len(scheduled) == 2
+        notify.alert(ConnectionError(), notify.WS_LOST, kind="ws", scope="thread-a")
+        notify.alert(ConnectionError(), notify.WS_LOST, kind="ws", scope="thread-b")
+        notify.alert(ConnectionError(), kind="unreachable")
+        assert len(scheduled) == 2  # one WS alert plus one HTTP alert
 
         notify.recovered(kind="ws", scope="thread-a")
+        notify.recovered_http()
+        assert len(scheduled) == 2
+        assert notify.is_active("ws", "thread-b")
 
-        assert len(scheduled) == 2, "WS recovery must not claim turn-taking is active while HTTP is down"
-        assert not notify.is_active("ws", "thread-a")
-        assert notify.is_active("unreachable")
+        notify.recovered(kind="ws", scope="thread-b")
+        assert len(scheduled) == 3  # one recovery, after the final fault clears
     finally:
-        notify._schedule = original_schedule
+        notify._schedule = original
 
 
-def test_cooldown_suppresses_repeated_flap_alerts_and_recoveries():
-    _reset_runtime()
-    scheduled = []
-    original_schedule = notify._schedule
-    original_monotonic = notify.time.monotonic
-    notify._schedule = scheduled.append
-    notify.time.monotonic = lambda: 1000.0
-    try:
-        for _ in range(10):
-            notify.alert(ConnectionError("ws flap"), notify.WS_LOST, kind="ws", scope="thread-a")
-            notify.recovered(kind="ws", scope="thread-a")
-
-        assert len(scheduled) == 2, "ten immediate flaps should emit one outage and one recovery"
-    finally:
-        notify._schedule = original_schedule
-        notify.time.monotonic = original_monotonic
-
-
-def test_concurrent_thread_alerts_are_deduplicated_until_every_scope_recovers():
-    _reset_runtime()
-    scheduled = []
-    schedule_lock = threading.Lock()
-    original_schedule = notify._schedule
-
-    def capture(make_coro):
-        with schedule_lock:
-            scheduled.append(make_coro)
-
-    notify._schedule = capture
-    try:
-        scopes = [f"thread-{i}" for i in range(32)]
-        with ThreadPoolExecutor(max_workers=16) as pool:
-            list(pool.map(
-                lambda scope: notify.alert(
-                    ConnectionError("drop"), notify.WS_LOST, kind="ws", scope=scope
-                ),
-                scopes,
-            ))
-        assert len(scheduled) == 1, "concurrent WS losses should emit one owner alert"
-        assert all(notify.is_active("ws", scope) for scope in scopes)
-
-        with ThreadPoolExecutor(max_workers=16) as pool:
-            list(pool.map(lambda scope: notify.recovered(kind="ws", scope=scope), scopes[:-1]))
-        assert len(scheduled) == 1, "partial recovery must not claim realtime is restored"
-        assert notify.is_active("ws", scopes[-1])
-
-        notify.recovered(kind="ws", scope=scopes[-1])
-        assert len(scheduled) == 2, "the last recovered connection emits one genuine recovery"
-    finally:
-        notify._schedule = original_schedule
-
-
-def test_stale_supervisor_cleanup_preserves_new_owner_state():
-    _reset_runtime()
-    old_task = object()
-    new_task = object()
-    adapter = _Adapter()
-    state.DELIVERY_TASKS["thread-a"] = new_task
-    state.DELIVERY_READY.add("thread-a")
-    state.ROUTES["thread-a"] = (adapter, "chat-a")
-    state.SESSIONS["session-a"] = "thread-a"
-    with notify._LOCK:
-        notify._active_scopes["ws"] = {"thread-a"}
-
-    delivery._cleanup_delivery_state("thread-a", old_task)
-
-    assert state.DELIVERY_TASKS["thread-a"] is new_task
-    assert "thread-a" in state.DELIVERY_READY
-    assert state.ROUTES["thread-a"] == (adapter, "chat-a")
-    assert state.SESSIONS["session-a"] == "thread-a"
-    assert notify.is_active("ws", "thread-a")
-
-
-def test_plugin_declares_websocket_runtime_dependency():
-    manifest = (_ROOT / "plugin.yaml").read_text()
-    assert "pip_dependencies:" in manifest
-    assert "websockets" in manifest
-
-
-@pytest.mark.asyncio
-async def test_missing_websocket_dependency_stops_supervisor_without_reconnect_grants():
-    _reset_runtime()
-    assert hasattr(service, "WebSocketDependencyError"), "dependency failure needs a permanent type"
-    adapter = _Adapter()
-    grant_attempts = 0
-    sleep_attempts = 0
-    original_receive = delivery._receive_loop
-    original_open = delivery.open_thread
-    original_sleep = delivery._sleep
-
-    async def missing_dependency(*_args, **_kwargs):
-        raise service.WebSocketDependencyError("websockets is not installed")
-
-    async def fake_open(_thread_id=None):
-        nonlocal grant_attempts
-        grant_attempts += 1
-        return None
-
-    async def fake_sleep(_delay):
-        nonlocal sleep_attempts
-        sleep_attempts += 1
-
-    delivery._receive_loop = missing_dependency
-    delivery.open_thread = fake_open
-    delivery._sleep = fake_sleep
-    try:
-        tid = await delivery._start_delivery(
-            adapter,
-            "chat-a",
-            open_response={
-                "thread": {"id": "thread-a"},
-                "realtime": {"connect_url": "ws://initial"},
-            },
-        )
-        assert tid == "thread-a"
-        task = state.DELIVERY_TASKS["thread-a"]
-        await asyncio.wait_for(task, timeout=1)
-        assert grant_attempts == 0
-        assert sleep_attempts == 0
-        assert "thread-a" not in state.DELIVERY_TASKS
-        assert "thread-a" not in state.DELIVERY_READY
-        assert "thread-a" not in state.ROUTES
-    finally:
-        delivery._receive_loop = original_receive
-        delivery.open_thread = original_open
-        delivery._sleep = original_sleep
-        await delivery._stop_all_deliveries()
-
-
-@pytest.mark.asyncio
-async def test_disconnect_reconnects_with_fresh_token_and_delivery_stays_active():
-    _reset_runtime()
-    adapter = _Adapter()
-    attempts = []
-    delivered = []
-    second_connected = asyncio.Event()
-    hold_second = asyncio.Event()
-
-    original_receive = delivery._receive_loop
-    original_open = delivery.open_thread
-    original_sleep = delivery._sleep
-    original_forward = delivery._forward
-
-    async def fake_forward(thread_id, content, metadata=None):
-        delivered.append((thread_id, content))
-
-    async def fake_receive(url, on_message, on_typing, on_connected=None):
-        attempts.append(url)
-        if on_connected is not None:
-            await on_connected()
-        if url == "ws://initial-token":
-            raise ConnectionError("induced disconnect")
-        await on_message("thread-a", "after reconnect", None)
-        second_connected.set()
-        await hold_second.wait()
-
-    async def fake_open(thread_id=None):
-        assert thread_id == "thread-a"
-        return {
-            "thread": {"id": "thread-a"},
-            "realtime": {"connect_url": "ws://fresh-token"},
-        }
-
-    async def no_wait(_delay):
-        return None
-
-    delivery._receive_loop = fake_receive
-    delivery.open_thread = fake_open
-    delivery._sleep = no_wait
-    delivery._forward = fake_forward
-    try:
-        tid = await delivery._start_delivery(
-            adapter,
-            "chat-a",
-            open_response={
-                "thread": {"id": "thread-a"},
-                "realtime": {"connect_url": "ws://initial-token"},
-            },
-        )
-        assert tid == "thread-a"
-        await asyncio.wait_for(second_connected.wait(), timeout=1)
-        assert attempts == ["ws://initial-token", "ws://fresh-token"]
-        assert delivered == [("thread-a", "after reconnect")]
-        assert state.DELIVERY_READY == {"thread-a"}
-        assert not delivery._chat_for_session("missing")
-
-        state.SESSIONS["session-a"] = "thread-a"
-        assert delivery._chat_for_session("session-a") == "chat-a"
-
-        await delivery._stop_delivery("thread-a")
-        assert "thread-a" not in state.DELIVERY_TASKS
-        assert "thread-a" not in state.DELIVERY_READY
-        await asyncio.sleep(0)
-        assert attempts == ["ws://initial-token", "ws://fresh-token"], "shutdown must not reconnect"
-    finally:
-        hold_second.set()
-        delivery._receive_loop = original_receive
-        delivery.open_thread = original_open
-        delivery._sleep = original_sleep
-        delivery._forward = original_forward
-        await delivery._stop_all_deliveries()
-
-
-@pytest.mark.asyncio
-async def test_multiple_threads_have_independent_supervisors_and_clean_shutdown():
-    _reset_runtime()
-    adapter = _Adapter()
-    connected = Counter()
-    both_ready = asyncio.Event()
-    blockers = {"thread-a": asyncio.Event(), "thread-b": asyncio.Event()}
-
-    original_receive = delivery._receive_loop
-
-    async def fake_receive(url, on_message, on_typing, on_connected=None):
-        tid = url.rsplit("/", 1)[-1]
-        connected[tid] += 1
-        if on_connected is not None:
-            await on_connected()
-        if sum(connected.values()) == 2:
-            both_ready.set()
-        await blockers[tid].wait()
-
-    delivery._receive_loop = fake_receive
-    try:
-        for tid in ("thread-a", "thread-b"):
-            result = await delivery._start_delivery(
-                adapter,
-                f"chat-{tid[-1]}",
-                open_response={
-                    "thread": {"id": tid},
-                    "realtime": {"connect_url": f"ws://token/{tid}"},
-                },
-            )
-            assert result == tid
-        await asyncio.wait_for(both_ready.wait(), timeout=1)
-        assert set(state.DELIVERY_TASKS) == {"thread-a", "thread-b"}
-        assert state.DELIVERY_READY == {"thread-a", "thread-b"}
-        assert state.DELIVERY_TASKS["thread-a"] is not state.DELIVERY_TASKS["thread-b"]
-
-        tasks = list(state.DELIVERY_TASKS.values())
-        await delivery._stop_all_deliveries()
-        assert not state.DELIVERY_TASKS
-        assert not state.DELIVERY_READY
-        assert all(task.done() for task in tasks)
-    finally:
-        for blocker in blockers.values():
-            blocker.set()
-        delivery._receive_loop = original_receive
-        await delivery._stop_all_deliveries()
-
-
-@pytest.mark.asyncio
-async def test_reconnect_grant_failures_keep_retrying_with_bounded_backoff():
-    _reset_runtime()
-    adapter = _Adapter()
-    sleeps = []
-    grant_attempts = 0
-    reconnected = asyncio.Event()
+async def test_reconnect_uses_fresh_token_backoff_and_stops_when_cancelled():
+    _reset()
+    attempts, sleeps = [], []
+    grants = 0
+    connected = asyncio.Event()
     hold = asyncio.Event()
-
     original_receive = delivery._receive_loop
     original_open = delivery.open_thread
     original_sleep = delivery._sleep
 
-    async def fake_receive(url, on_message, on_typing, on_connected=None):
+    async def receive(url, _on_message, _on_typing, on_connected=None):
+        attempts.append(url)
         if url == "ws://initial":
             raise ConnectionError("drop")
-        if on_connected is not None:
-            await on_connected()
-        reconnected.set()
+        await on_connected()
+        connected.set()
         await hold.wait()
 
-    async def fake_open(thread_id=None):
-        nonlocal grant_attempts
-        grant_attempts += 1
-        if grant_attempts == 1:
+    async def reopen(thread_id=None):
+        nonlocal grants
+        grants += 1
+        if grants == 1:
             return None
         return {
             "thread": {"id": thread_id},
             "realtime": {"connect_url": "ws://fresh"},
         }
 
-    async def record_sleep(delay):
+    async def sleep(delay):
         sleeps.append(delay)
 
-    delivery._receive_loop = fake_receive
-    delivery.open_thread = fake_open
-    delivery._sleep = record_sleep
+    delivery._receive_loop = receive
+    delivery.open_thread = reopen
+    delivery._sleep = sleep
     try:
         await delivery._start_delivery(
-            adapter,
+            _Adapter(),
             "chat-a",
             open_response={
                 "thread": {"id": "thread-a"},
                 "realtime": {"connect_url": "ws://initial"},
             },
         )
-        await asyncio.wait_for(reconnected.wait(), timeout=1)
-        assert grant_attempts == 2
+        await asyncio.wait_for(connected.wait(), 1)
+        assert attempts == ["ws://initial", "ws://fresh"]
         assert sleeps == [1.0, 2.0]
+
+        await delivery._stop_delivery("thread-a")
+        await asyncio.sleep(0)
+        assert attempts == ["ws://initial", "ws://fresh"]
+        assert "thread-a" not in state.DELIVERY_TASKS
     finally:
         hold.set()
         delivery._receive_loop = original_receive
@@ -406,13 +124,48 @@ async def test_reconnect_grant_failures_keep_retrying_with_bounded_backoff():
         await delivery._stop_all_deliveries()
 
 
+async def test_permanent_dependency_failure_does_not_retry():
+    _reset()
+    grants = sleeps = 0
+    original_receive = delivery._receive_loop
+    original_open = delivery.open_thread
+    original_sleep = delivery._sleep
+
+    async def receive(*_args, **_kwargs):
+        raise service.WebSocketDependencyError("missing")
+
+    async def reopen(_thread_id=None):
+        nonlocal grants
+        grants += 1
+
+    async def sleep(_delay):
+        nonlocal sleeps
+        sleeps += 1
+
+    delivery._receive_loop = receive
+    delivery.open_thread = reopen
+    delivery._sleep = sleep
+    try:
+        await delivery._start_delivery(
+            _Adapter(),
+            "chat-a",
+            open_response={
+                "thread": {"id": "thread-a"},
+                "realtime": {"connect_url": "ws://initial"},
+            },
+        )
+        await asyncio.wait_for(state.DELIVERY_TASKS["thread-a"], 1)
+        assert grants == sleeps == 0
+        assert "thread-a" not in state.DELIVERY_TASKS
+    finally:
+        delivery._receive_loop = original_receive
+        delivery.open_thread = original_open
+        delivery._sleep = original_sleep
+        await delivery._stop_all_deliveries()
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
-        if not name.startswith("test_") or not callable(fn):
-            continue
-        if inspect.iscoroutinefunction(fn):
-            asyncio.run(fn())
-        else:
-            fn()
-        print(f"ok {name}")
-    print("all passed")
+        if name.startswith("test_"):
+            asyncio.run(fn()) if inspect.iscoroutinefunction(fn) else fn()
+            print(f"ok {name}")

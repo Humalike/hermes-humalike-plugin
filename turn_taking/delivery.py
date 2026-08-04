@@ -108,10 +108,9 @@ def _cleanup_delivery_state(thread_id: str, task: Optional[asyncio.Task] = None)
     current = state.DELIVERY_TASKS.get(thread_id)
     if task is not None and current is not task:
         # A replacement supervisor owns this thread now. The stale task's finally
-        # block must not erase the new owner's route, readiness, session, or alert.
+        # block must not erase the new owner's route, session, or alert.
         return
     state.DELIVERY_TASKS.pop(thread_id, None)
-    state.DELIVERY_READY.discard(thread_id)
     state.ROUTES.pop(thread_id, None)
     for session_id, tid in list(state.SESSIONS.items()):
         if tid == thread_id:
@@ -128,7 +127,6 @@ async def _supervise_delivery(thread_id: str, initial_url: str) -> None:
         while True:
             async def connected() -> None:
                 nonlocal backoff
-                state.DELIVERY_READY.add(thread_id)
                 backoff = _RECONNECT_BACKOFF_INITIAL
                 notify.recovered(kind="ws", scope=thread_id)
 
@@ -138,7 +136,6 @@ async def _supervise_delivery(thread_id: str, initial_url: str) -> None:
             except asyncio.CancelledError:
                 raise
             except WebSocketDependencyError as e:
-                state.DELIVERY_READY.discard(thread_id)
                 _log.error(
                     "turn-taking WS stopped tid=%s; permanent dependency failure: %s",
                     thread_id, e,
@@ -146,7 +143,6 @@ async def _supervise_delivery(thread_id: str, initial_url: str) -> None:
                 notify.alert(e, notify.WS_LOST, kind="ws", scope=thread_id)
                 return
             except Exception as e:
-                state.DELIVERY_READY.discard(thread_id)
                 _log.warning(
                     "turn-taking WS disconnected tid=%s; retrying in %.1fs: %s",
                     thread_id, backoff, e,
@@ -242,10 +238,7 @@ async def _ensure_thread(session_id: str, adapter: Any, chat_id: str) -> Optiona
 
 
 def _chat_for_session(session_id: str) -> Optional[str]:
-    """Return the chat only while its supervised realtime path is connected."""
+    """The WhatsApp chat_id a session delivers to (session → thread → route)."""
     thread = state.SESSIONS.get(session_id)
-    task = state.DELIVERY_TASKS.get(thread or "")
-    if not thread or thread not in state.DELIVERY_READY or task is None or task.done():
-        return None
     route = state.ROUTES.get(thread or "") if thread else None
     return route[1] if route else None

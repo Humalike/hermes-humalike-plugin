@@ -34,7 +34,7 @@ _pending: list = []                   # (text, on_delivered) startup msgs, flush
 _GLOBAL_SCOPE = "__global__"
 
 WS_LOST = ("⚠️ Humalike realtime connection lost — reconnecting automatically; "
-           "affected chats temporarily use direct Hermes replies.")
+           "the bot may go SILENT in affected chats until it reconnects.")
 
 
 def _kind(status: Optional[int]) -> str:

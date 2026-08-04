@@ -110,12 +110,6 @@ def on_transform_llm_output(response_text=None, session_id=None, **kwargs):
     if not draft or epoch is None:
         return None  # not a turn-taking speak turn → leave Hermes alone
     chat = _chat_for_session(sid)
-    if not chat:
-        _log.warning(
-            "tt transform: realtime delivery not ready for session=%s; preserving raw answer",
-            sid,
-        )
-        return None
     # A follow-up that arrived mid-turn gets merged into THIS turn's context, but
     # the epoch above was bound at turn start — the service would drop the reply
     # as superseded even though it answers the newest message. Stamp with the
@@ -132,7 +126,8 @@ def on_transform_llm_output(response_text=None, session_id=None, **kwargs):
     if latest is not None and latest != epoch and not _queued_follow_up(chat):
         _log.info("tt transform: epoch %s → %s (follow-up merged into this turn)", epoch, latest)
         epoch = latest
-    _suppress_answer(chat, draft)  # drop only when realtime delivery is ready
+    if chat:
+        _suppress_answer(chat, draft)  # drop the send whose content matches this answer
     _log.info("tt transform: session=%s chat=%s mid=%s epoch=%s → naturalize + suppress raw send | %r",
               sid, chat, mid, epoch, (draft or "").strip()[:50])
     # transform_llm_output runs in the agent's worker thread (no running loop here),
