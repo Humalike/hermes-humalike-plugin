@@ -10,12 +10,17 @@ import sys
 import types
 from pathlib import Path
 
-if "httpx" not in sys.modules:
-    sys.modules["httpx"] = types.SimpleNamespace(
+try:
+    import httpx as _httpx  # noqa: F401
+except ImportError:
+    _httpx_stub = types.SimpleNamespace(
         AsyncClient=object,
         HTTPError=type("HTTPError", (Exception,), {}),
         HTTPStatusError=type("HTTPStatusError", (Exception,), {}),
     )
+    sys.modules["httpx"] = _httpx_stub
+else:
+    _httpx_stub = None
 
 _ROOT = Path(__file__).resolve().parent.parent
 _pkg = types.ModuleType("humalike_recovery_test")
@@ -26,6 +31,9 @@ state = importlib.import_module("humalike_recovery_test.turn_taking.state")
 notify = importlib.import_module("humalike_recovery_test.turn_taking.notify")
 service = importlib.import_module("humalike_recovery_test.turn_taking.service")
 delivery = importlib.import_module("humalike_recovery_test.turn_taking.delivery")
+
+if _httpx_stub is not None and sys.modules.get("httpx") is _httpx_stub:
+    del sys.modules["httpx"]
 
 
 class _Adapter:
@@ -127,9 +135,12 @@ async def test_reconnect_uses_fresh_token_backoff_and_stops_when_cancelled():
 async def test_permanent_dependency_failure_does_not_retry():
     _reset()
     grants = sleeps = 0
+    alerts = []
     original_receive = delivery._receive_loop
     original_open = delivery.open_thread
     original_sleep = delivery._sleep
+    original_alert = notify.alert
+    original_schedule = notify._schedule
 
     async def receive(*_args, **_kwargs):
         raise service.WebSocketDependencyError("missing")
@@ -142,9 +153,15 @@ async def test_permanent_dependency_failure_does_not_retry():
         nonlocal sleeps
         sleeps += 1
 
+    def alert(*args, **kwargs):
+        alerts.append((args, kwargs))
+        original_alert(*args, **kwargs)
+
     delivery._receive_loop = receive
     delivery.open_thread = reopen
     delivery._sleep = sleep
+    notify.alert = alert
+    notify._schedule = lambda _make_coro: None
     try:
         await delivery._start_delivery(
             _Adapter(),
@@ -157,10 +174,14 @@ async def test_permanent_dependency_failure_does_not_retry():
         await asyncio.wait_for(state.DELIVERY_TASKS["thread-a"], 1)
         assert grants == sleeps == 0
         assert "thread-a" not in state.DELIVERY_TASKS
+        assert notify.is_active("ws", "thread-a")
+        assert "reconnecting" not in alerts[0][0][1]
     finally:
         delivery._receive_loop = original_receive
         delivery.open_thread = original_open
         delivery._sleep = original_sleep
+        notify.alert = original_alert
+        notify._schedule = original_schedule
         await delivery._stop_all_deliveries()
 
 

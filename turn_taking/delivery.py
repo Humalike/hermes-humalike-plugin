@@ -104,7 +104,9 @@ async def _forward_typing(thread_id: Optional[str], is_typing: Optional[bool]) -
 
 
 # ── Delivery bootstrap: open thread + supervised WS lifecycle ─────────────────
-def _cleanup_delivery_state(thread_id: str, task: Optional[asyncio.Task] = None) -> None:
+def _cleanup_delivery_state(
+    thread_id: str, task: Optional[asyncio.Task] = None, *, clear_alert: bool = True
+) -> None:
     current = state.DELIVERY_TASKS.get(thread_id)
     if task is not None and current is not task:
         # A replacement supervisor owns this thread now. The stale task's finally
@@ -115,7 +117,8 @@ def _cleanup_delivery_state(thread_id: str, task: Optional[asyncio.Task] = None)
     for session_id, tid in list(state.SESSIONS.items()):
         if tid == thread_id:
             state.SESSIONS.pop(session_id, None)
-    notify.clear("ws", thread_id)
+    if clear_alert:
+        notify.clear("ws", thread_id)
 
 
 async def _supervise_delivery(thread_id: str, initial_url: str) -> None:
@@ -123,6 +126,7 @@ async def _supervise_delivery(thread_id: str, initial_url: str) -> None:
     url = initial_url
     backoff = _RECONNECT_BACKOFF_INITIAL
     task = asyncio.current_task()
+    clear_alert = True
     try:
         while True:
             async def connected() -> None:
@@ -136,11 +140,12 @@ async def _supervise_delivery(thread_id: str, initial_url: str) -> None:
             except asyncio.CancelledError:
                 raise
             except WebSocketDependencyError as e:
+                clear_alert = False
                 _log.error(
                     "turn-taking WS stopped tid=%s; permanent dependency failure: %s",
                     thread_id, e,
                 )
-                notify.alert(e, notify.WS_LOST, kind="ws", scope=thread_id)
+                notify.alert(e, notify.WS_STOPPED, kind="ws", scope=thread_id)
                 return
             except Exception as e:
                 _log.warning(
@@ -165,7 +170,7 @@ async def _supervise_delivery(thread_id: str, initial_url: str) -> None:
                     break
                 _log.warning("turn-taking reconnect grant malformed tid=%s", thread_id)
     finally:
-        _cleanup_delivery_state(thread_id, task)
+        _cleanup_delivery_state(thread_id, task, clear_alert=clear_alert)
 
 
 async def _stop_delivery(thread_id: str) -> None:

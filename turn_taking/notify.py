@@ -35,6 +35,8 @@ _GLOBAL_SCOPE = "__global__"
 
 WS_LOST = ("⚠️ Humalike realtime connection lost — reconnecting automatically; "
            "the bot may go SILENT in affected chats until it reconnects.")
+WS_STOPPED = ("⚠️ Humalike realtime connection stopped — WebSocket support is unavailable; "
+              "the bot will stay SILENT in affected chats until Hermes is restarted.")
 
 
 def _kind(status: Optional[int]) -> str:
