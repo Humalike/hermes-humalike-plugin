@@ -95,7 +95,7 @@ def _pacing() -> Dict[str, Any]:
     try:
         import yaml
 
-        cfg = yaml.safe_load(_hermes_config().read_text()) or {}
+        cfg = yaml.safe_load(_hermes_config().read_text(encoding="utf-8")) or {}
         pacing = (cfg.get("turn_taking") or {}).get("pacing")
         if isinstance(pacing, dict) and pacing:
             return dict(pacing)

@@ -223,7 +223,7 @@ def _merged_env() -> dict:
 def maybe_autoconfigure() -> None:
     """Apply whatever plan() says is left, record it, and report TUI-safely."""
     try:
-        done = set(_MARKER.read_text().split()) if _MARKER.exists() else set()
+        done = set(_MARKER.read_text(encoding="utf-8").split()) if _MARKER.exists() else set()
     except Exception:
         done = set()
 
@@ -232,7 +232,7 @@ def maybe_autoconfigure() -> None:
     try:
         import yaml
 
-        cfg = yaml.safe_load(_CONFIG.read_text()) or {}
+        cfg = yaml.safe_load(_CONFIG.read_text(encoding="utf-8")) or {}
         if not isinstance(cfg, dict):
             cfg, cfg_writable = {}, False
     except FileNotFoundError:
@@ -256,7 +256,7 @@ def maybe_autoconfigure() -> None:
 
             cfg.update(config_updates)
             _CONFIG.parent.mkdir(parents=True, exist_ok=True)
-            _CONFIG.write_text(yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True))
+            _CONFIG.write_text(yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True), encoding="utf-8")
         except Exception as e:
             _log.warning("turn-taking: autoconfig could not write %s: %s", _CONFIG, e)
             sections = [s for s in sections if s != "core"]  # retry next boot
@@ -273,7 +273,7 @@ def maybe_autoconfigure() -> None:
 
     try:
         _MARKER.parent.mkdir(parents=True, exist_ok=True)
-        _MARKER.write_text("\n".join(sorted(done | set(sections))) + "\n")
+        _MARKER.write_text("\n".join(sorted(done | set(sections))) + "\n", encoding="utf-8")
     except Exception:
         pass  # best-effort; worst case a section re-applies (it is idempotent)
 

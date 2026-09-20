@@ -159,7 +159,7 @@ def _should_chat_warn(digest: str) -> bool:
     nagged — but any new or changed problem warns again. Logs still fire every
     boot regardless."""
     try:
-        return _marker_path().read_text().strip() != digest
+        return _marker_path().read_text(encoding="utf-8").strip() != digest
     except Exception:
         return True
 
@@ -171,7 +171,7 @@ def _mark_chat_warned(digest: str) -> None:
     try:
         p = _marker_path()
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(digest)
+        p.write_text(digest, encoding="utf-8")
     except Exception:
         pass  # best-effort; worst case the warning repeats, never lost
 
@@ -225,7 +225,7 @@ def _warn_misconfig() -> None:
         # ~/.hermes here reads a stray/empty file under a relocated home (Docker
         # HERMES_HOME=/opt/data, Windows), warning about config that is actually
         # correct on disk. login._hermes_home() is the host's own resolver.
-        cfg = yaml.safe_load((login._hermes_home() / "config.yaml").read_text()) or {}
+        cfg = yaml.safe_load((login._hermes_home() / "config.yaml").read_text(encoding="utf-8")) or {}
     except FileNotFoundError:
         cfg = {}
     except Exception as e:

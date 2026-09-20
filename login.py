@@ -74,7 +74,7 @@ PENDING_URI = None
 def read_env_file(path: Path | None = None) -> dict:
     """``KEY=VALUE`` lines (just the subset we need — no quoting/expansion)."""
     try:
-        lines = (path or HERMES_ENV).read_text().splitlines()
+        lines = (path or HERMES_ENV).read_text(encoding="utf-8").splitlines()
     except OSError:
         return {}
     out = {}
@@ -145,7 +145,7 @@ def upsert_env(path: Path, updates: dict) -> None:
     included). A fresh file is created 0600 from the first byte (no
     world-readable window — it can hold a live credential)."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    lines = path.read_text().splitlines() if path.exists() else []
+    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
     lines = [ln for ln in lines if ln.split("=", 1)[0].strip() not in updates]
     lines += [f"{k}={v}" for k, v in updates.items()]
     # Atomic swap: write a private temp then os.replace onto the real path, so a
@@ -154,7 +154,7 @@ def upsert_env(path: Path, updates: dict) -> None:
     # each other's temp; os.replace is atomic, last writer wins cleanly.
     tmp = path.with_name(f"{path.name}.tmp.{os.getpid()}")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as fh:
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
         fh.write("\n".join(lines) + "\n")
     os.replace(tmp, path)
 
