@@ -21,6 +21,11 @@ from . import notify
 
 _log = logging.getLogger(__name__)
 
+
+class WebSocketDependencyError(RuntimeError):
+    """Permanent realtime startup failure: the WebSocket runtime is unavailable."""
+
+
 # ── Wire contract (turn-taking service action paths) ──────────────────────────
 OPEN_THREAD_PATH = "/v1/turn-taking/actions/open_thread"
 SUBMIT_PATH = "/v1/turn-taking/actions/submit_messages"
@@ -124,7 +129,7 @@ async def _post(path: str, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         async with httpx.AsyncClient(timeout=30.0) as client:
             r = await client.post(base + path, json=body, headers=_headers())
             r.raise_for_status()
-            notify.recovered()  # success → clear any active alert, post recovery once
+            notify.recovered_http()  # HTTP success must not clear live WS failures
             return r.json()
     except httpx.HTTPStatusError as e:
         # 4xx = our request is wrong (bad key/payload) — actionable, log loud.
@@ -234,6 +239,7 @@ async def _receive_loop(
     connect_url: str,
     on_message: Callable[[Optional[str], Optional[str], Optional[Dict[str, Any]]], Awaitable[None]],
     on_typing: Optional[Callable[[Optional[str], Optional[bool]], Awaitable[None]]] = None,
+    on_connected: Optional[Callable[[], Awaitable[None]]] = None,
 ) -> None:
     """Read envelopes until the socket closes; dispatch each by ``type``.
 
@@ -242,33 +248,30 @@ async def _receive_loop(
     - ``turn_taking.typing``  → ``await on_typing(thread_id, typing)`` (if provided)
     - ``attached`` (handshake) → ignored
 
-    No reconnect: assumes a stable connection. On close/error it logs and
-    returns; the supervising task decides what to do next.
+    Transport errors propagate to the per-thread supervisor, which obtains a
+    fresh short-lived token and reconnects with bounded backoff.
     """
     try:
         import websockets
-    except Exception as e:  # dependency missing
+    except ImportError as e:  # dependency missing: installation/configuration defect, not transient
         _log.warning("turn-taking WS unavailable (no websockets lib): %s", e)
-        notify.alert(e, notify.WS_LOST, kind="ws")
-        return
-    try:
-        async with websockets.connect(connect_url) as ws:
-            _log.info("tt ws: connected | %s", connect_url[:80])
-            async for frame in ws:
-                try:
-                    env = json.loads(frame)
-                except Exception:
-                    continue
-                t = env.get("type")
-                data = env.get("data") or {}
-                _log.info("tt ws: frame type=%s tid=%s", t, data.get("thread_id"))
-                if t == "turn_taking.message":
-                    await on_message(data.get("thread_id"), data.get("content"), data.get("metadata"))
-                elif t == "turn_taking.typing" and on_typing is not None:
-                    await on_typing(data.get("thread_id"), data.get("typing"))
-    except Exception as e:
-        _log.warning("turn-taking WS loop ended: %s", e)
-        notify.alert(e, notify.WS_LOST, kind="ws")
+        raise WebSocketDependencyError("websockets dependency is not installed") from e
+    async with websockets.connect(connect_url) as ws:
+        _log.info("tt ws: connected | %s", connect_url[:80])
+        if on_connected is not None:
+            await on_connected()
+        async for frame in ws:
+            try:
+                env = json.loads(frame)
+            except Exception:
+                continue
+            t = env.get("type")
+            data = env.get("data") or {}
+            _log.info("tt ws: frame type=%s tid=%s", t, data.get("thread_id"))
+            if t == "turn_taking.message":
+                await on_message(data.get("thread_id"), data.get("content"), data.get("metadata"))
+            elif t == "turn_taking.typing" and on_typing is not None:
+                await on_typing(data.get("thread_id"), data.get("typing"))
 
 
 # ── Hermes wiring: inbound events → service batch ─────────────────────────────

@@ -64,6 +64,9 @@ LAST_CHAT_ID: str = ""
 SESSIONS: Dict[str, str] = {}  # Hermes session_id → turn-taking thread_id
 OPEN_LOCK = asyncio.Lock()     # serializes thread-opens (rare) so a burst can't double-open
 
+# One supervised realtime task per Humalike thread.
+DELIVERY_TASKS: Dict[str, asyncio.Task] = {}
+
 # ── Social memory: the context recalled at decide, reused this turn ───────────
 # session_id → recalled_context (what the agent remembers about the people here),
 # returned by submit_messages and reused for BOTH the reply draft (pre_llm_call
