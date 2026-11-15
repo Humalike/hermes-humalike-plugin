@@ -120,12 +120,28 @@ def _real_adapter_class(platform: str, class_name: str):
     from gateway.platform_registry import platform_registry
 
     platform_registry.get(platform)  # force-resolve the deferred loader
-    module_name = f"hermes_plugins.{platform}_platform.adapter"
-    module = sys.modules.get(module_name)
-    cls = getattr(module, class_name, None) if module is not None else None
-    if cls is None:
-        raise ImportError(f"{class_name} not found in {module_name}")
-    return cls
+    # The synthetic name changed in Hermes v2026.9.24: the loader now derives it from the
+    # manifest key ("platforms/whatsapp" -> ``hermes_plugins.platforms__whatsapp``), and a
+    # second Hermes home in the same process gets a ``__home_<digest>`` suffix. Try the
+    # known names first, then fall back to whichever loaded module IS that adapter file.
+    candidates = (
+        f"hermes_plugins.platforms__{platform}.adapter",
+        f"hermes_plugins.{platform}_platform.adapter",
+    )
+    for module_name in candidates:
+        cls = getattr(sys.modules.get(module_name), class_name, None)
+        if cls is not None:
+            return cls
+    suffix = ("platforms", platform, "adapter.py")
+    for module_name, module in list(sys.modules.items()):
+        if not module_name.startswith("hermes_plugins.") or not module_name.endswith(".adapter"):
+            continue
+        parts = os.path.normpath(getattr(module, "__file__", "") or "").split(os.sep)
+        if tuple(parts[-3:]) == suffix:
+            cls = getattr(module, class_name, None)
+            if cls is not None:
+                return cls
+    raise ImportError(f"{class_name} not found in {' or '.join(candidates)}")
 
 
 def _platform_adapter_classes() -> list:
