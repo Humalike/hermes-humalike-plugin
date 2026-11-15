@@ -9,3 +9,5 @@ hooks:
 provides_hooks:
   - pre_llm_call
   - transform_llm_output
+python_dependencies:
+  - "PyYAML>=6.0,<7"
