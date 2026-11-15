@@ -656,17 +656,24 @@ def _patch_merge_pending_message_event() -> bool:
 
     Fix: after the merge, rebind the surviving event's id to the LATEST — exactly
     what the debounce path already does for its own buffer (base.py:3491-3496).
-    Separate turns never enter the merge branch, so they are unaffected. Patched in
-    BOTH modules that name the function: ``gateway.platforms.base`` (defines it) and
-    ``gateway.run`` (imported it by value), else run's call sites keep the old one.
-    Idempotent.
+    Separate turns never enter the merge branch, so they are unaffected. Idempotent.
+
+    Patch target (changed for Hermes v2026.9.14, 2026-09-19): ``gateway.platforms.base``
+    defines the function and holds every call site. ``gateway.run`` used to import it
+    by value, so it had to be patched too — that is no longer true. 9.14 removed run's
+    binding and exposes the name through a lazy ``__getattr__`` compatibility shim
+    (see run.py's plugin-compat map). Reaching through that shim is what made Hermes
+    refuse to load this plugin ("imports module paths that were removed on 2026-09-14"),
+    and it would hard-break once the compat layer is deleted. So: always patch base,
+    and rebind run ONLY if it genuinely has its own binding (older Hermes). The
+    ``vars()`` check is deliberate — a plain ``getattr`` would trigger the shim and
+    re-flag the plugin.
     """
     global _merge_patched
     if _merge_patched:
         return False
     try:
         import gateway.platforms.base as _base
-        import gateway.run as _run
     except Exception as e:
         _log.warning("turn-taking: cannot patch merge (import failed): %s", e)
         return False
@@ -699,7 +706,13 @@ def _patch_merge_pending_message_event() -> bool:
 
     _merge._tt_patched = True  # type: ignore[attr-defined]
     _base.merge_pending_message_event = _merge
-    _run.merge_pending_message_event = _merge  # run.py imported it by value
+    # Legacy path only: rebind gateway.run's OWN binding if it has one. vars()
+    # never fires the compat __getattr__, so on 9.14+ this is simply skipped.
+    import sys as _sys
+    _run = _sys.modules.get("gateway.run")
+    if _run is not None and "merge_pending_message_event" in vars(_run):
+        _run.merge_pending_message_event = _merge
+        _log.info("tt: also rebound gateway.run's own binding (pre-9.14 layout)")
     _merge_patched = True
     _log.info("tt: merge_pending_message_event wrapped (keep latest id)")
     return True
