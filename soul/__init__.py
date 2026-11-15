@@ -71,7 +71,7 @@ def _cfg() -> Dict[str, Any]:
     try:
         import yaml
 
-        cfg = yaml.safe_load(_hermes_config().read_text()) or {}
+        cfg = yaml.safe_load(_hermes_config().read_text(encoding="utf-8")) or {}
         return cfg.get("turn_taking") or {}
     except Exception:
         return {}
@@ -262,7 +262,7 @@ async def command(raw_args: str) -> str:
 
     path = _soul_path()
     try:
-        raw = path.read_text()
+        raw = path.read_text(encoding="utf-8")
     except FileNotFoundError:
         raw = ""
     if not seed_body(raw):
@@ -278,8 +278,8 @@ async def command(raw_args: str) -> str:
 
     enhanced = enhanced.strip()
     try:
-        Path(str(path) + ".bak").write_text(raw)
-        path.write_text(enhanced + "\n")
+        Path(str(path) + ".bak").write_text(raw, encoding="utf-8")
+        path.write_text(enhanced + "\n", encoding="utf-8")
     except Exception as e:
         _log.warning("soul: write failed: %s", e)
         return f"⚠️ Enhanced, but couldn't write {path}: {e}"
@@ -317,7 +317,7 @@ def _auto_state(status: str) -> str:
 def _claim_auto_state(marker: Path) -> bool:
     marker.parent.mkdir(parents=True, exist_ok=True)
     try:
-        with marker.open("x") as state:
+        with marker.open("x", encoding="utf-8") as state:
             state.write(_auto_state("pending"))
     except FileExistsError:
         return False
@@ -326,7 +326,7 @@ def _claim_auto_state(marker: Path) -> bool:
 
 def _read_auto_state(marker: Path) -> Optional[str]:
     try:
-        status = json.loads(marker.read_text()).get("status")
+        status = json.loads(marker.read_text(encoding="utf-8")).get("status")
     except (OSError, json.JSONDecodeError, AttributeError):
         return None
     return status if isinstance(status, str) else None
@@ -335,7 +335,7 @@ def _read_auto_state(marker: Path) -> Optional[str]:
 def _write_auto_state(marker: Path, status: str) -> None:
     temporary = marker.with_name(f".{marker.name}.{threading.get_ident()}.tmp")
     try:
-        temporary.write_text(_auto_state(status))
+        temporary.write_text(_auto_state(status), encoding="utf-8")
         temporary.replace(marker)
     finally:
         if temporary.exists():
@@ -346,7 +346,7 @@ async def _auto_enhance(path: Path) -> bool:
     """One-shot enhance with no chat to reply to — log the outcome. Returns True
     only when SOUL.md was actually rewritten (so the caller sets the once-marker)."""
     try:
-        raw = path.read_text()
+        raw = path.read_text(encoding="utf-8")
     except FileNotFoundError:
         raw = ""
     if not seed_body(raw):
@@ -362,8 +362,8 @@ async def _auto_enhance(path: Path) -> bool:
         return False
     enhanced = enhanced.strip()
     try:
-        Path(str(path) + ".bak").write_text(raw)
-        path.write_text(enhanced + "\n")
+        Path(str(path) + ".bak").write_text(raw, encoding="utf-8")
+        path.write_text(enhanced + "\n", encoding="utf-8")
     except Exception as e:
         _log.warning("soul: auto-enhance write failed: %s", e)
         return False
@@ -377,7 +377,7 @@ def maybe_auto_enhance() -> Optional[str]:
         return
     path = _soul_path().resolve()
     try:
-        raw = path.read_text()
+        raw = path.read_text(encoding="utf-8")
     except FileNotFoundError:
         raw = ""
     if not seed_body(raw):
